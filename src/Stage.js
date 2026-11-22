@@ -119,3 +119,15 @@ window.__hvl.missing = function () {
     if (m.error || m.readyState < 2) resources.push(m.currentSrc || m.src);
   return Array.from(new Set(resources.filter(Boolean))).slice(0, 20);
 };
+
+window.__hvl.videos = function () {
+  const seen = new Set();
+  const out = [];
+  for (const m of document.querySelectorAll('video')) {
+    const src = m.currentSrc || m.src || (m.querySelector('source[src]') || {}).src;
+    if (!src || seen.has(src)) continue;
+    seen.add(src);
+    out.push(src);
+  }
+  return out;
+};

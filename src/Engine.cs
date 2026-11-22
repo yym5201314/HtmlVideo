@@ -201,6 +201,37 @@ namespace HtmlVideoLite
             return "";
         }
 
+        // Dump a local video to a JPEG frame sequence so the virtual clock can show the
+        // correct frame without live-decoding or seeking a real <video> element.
+        static async Task<int> DumpFrames(string path, string dir, int fps, Options o, ProcessJob job, CancellationToken token)
+        {
+            var args = new List<string> {
+                "-hide_banner", "-loglevel", "error", "-y", "-nostdin", "-i", path,
+                "-vf", "fps=" + fps.ToString(CultureInfo.InvariantCulture),
+                "-start_number", "0", "-q:v", "2", Path.Combine(dir, "frame_%05d.jpg")
+            };
+            var info = StartInfo(o.Ffmpeg, args);
+            info.RedirectStandardError = true;
+            info.StandardErrorEncoding = Encoding.UTF8;
+            using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(token))
+            using (var process = Process.Start(info))
+            {
+                job.Add(process);
+                timeout.CancelAfter(300000);
+                Task<string> error = process.StandardError.ReadToEndAsync();
+                using (timeout.Token.Register(() => { try { if (!process.HasExited) process.Kill(); } catch (InvalidOperationException) { } }))
+                {
+                    while (!process.HasExited) await Task.Delay(100).ConfigureAwait(false);
+                    string detail = await error.ConfigureAwait(false);
+                    token.ThrowIfCancellationRequested();
+                    if (timeout.IsCancellationRequested) throw new TimeoutException("视频抽帧超过 300 秒：" + path);
+                    if (process.ExitCode != 0)
+                        throw new IOException("视频抽帧失败：" + (string.IsNullOrWhiteSpace(detail) ? "退出码 " + process.ExitCode : detail.Trim()));
+                }
+            }
+            return Directory.GetFiles(dir, "frame_*.jpg").Length;
+        }
+
         internal static async Task<string> ConvertVideo(Options o, Action<Update> progress, CancellationToken token)
         {
             Validate(o);
@@ -256,6 +287,42 @@ namespace HtmlVideoLite
                     foreach (object resource in missing)
                         progress(new Update(3, "素材未加载：" + resource));
                     string audio = await Audio(page, o, work, progress, job, token).ConfigureAwait(false);
+                    try
+                    {
+                        var videos = (System.Collections.IList)await page.Evaluate("window.__hvl.videos()").ConfigureAwait(false);
+                        var frameMap = new Dictionary<string, Dictionary<string, object>>();
+                        int slot = 0;
+                        foreach (object entry in videos)
+                        {
+                            string src = Convert.ToString(entry);
+                            Uri uri;
+                            if (!Uri.TryCreate(src, UriKind.Absolute, out uri) || !uri.IsFile) continue;
+                            string path = uri.LocalPath;
+                            if (!File.Exists(path)) continue;
+                            string dir = Path.Combine(work, "frames-" + (slot++));
+                            Directory.CreateDirectory(dir);
+                            progress(new Update(3, "抽取视频帧（避免逐帧寻帧卡死）：" + path));
+                            try
+                            {
+                                int count = await DumpFrames(path, dir, o.Fps, o, job, token).ConfigureAwait(false);
+                                if (count == 0) continue;
+                                frameMap[src] = new Dictionary<string, object> {
+                                    { "base", new Uri(dir).AbsoluteUri + "/frame_" },
+                                    { "fps", o.Fps }, { "count", count }
+                                };
+                            }
+                            catch (Exception e)
+                            {
+                                progress(new Update(3, "视频抽帧失败，改用逐帧寻帧：" + path + "（" + e.Message.Split('\n')[0] + "）"));
+                            }
+                        }
+                        if (frameMap.Count > 0)
+                            await page.Evaluate("window.__hvl.useFrames(" + Cdp.Json.Serialize(frameMap) + ")").ConfigureAwait(false);
+                    }
+                    catch (Exception e)
+                    {
+                        progress(new Update(3, "视频抽帧处理跳过：" + e.Message.Split('\n')[0]));
+                    }
                     if (audio.Length > 0 && string.Equals(audio, o.Output, StringComparison.OrdinalIgnoreCase))
                         throw new ArgumentException("输出文件不能覆盖页面引用的音视频资源。");
                     int frames = Math.Max(1, (int)Math.Ceiling(duration * o.Fps - 1e-9));

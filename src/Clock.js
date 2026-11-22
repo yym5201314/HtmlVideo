@@ -6,6 +6,7 @@
   let now = 0, sequence = 0;
   const timers = new Map(), rafs = new Map(), animations = new WeakMap();
   const mediaState = new WeakMap();
+  const frames = new WeakMap();
   const faults = [];
   const report = e => { faults.push(String(e.stack || e)); if (faults.length > 20) faults.shift(); };
   class VirtualDate extends RealDate {
@@ -33,6 +34,7 @@
   const time = Object.getOwnPropertyDescriptor(proto, 'currentTime');
   const paused = Object.getOwnPropertyDescriptor(proto, 'paused');
   const ended = Object.getOwnPropertyDescriptor(proto, 'ended');
+  const nativeDuration = Object.getOwnPropertyDescriptor(proto, 'duration');
   function state(m) {
     if (!mediaState.has(m)) mediaState.set(m, {
       playing: m.autoplay, origin: now, offset: m.autoplay ? 0 : (time.get.call(m) || 0), finished: false
@@ -74,8 +76,21 @@
     get() { return position(this, state(this)); },
     set(v) { const s = state(this); s.offset = Number(v); s.origin = now; s.finished = false; time.set.call(this, v); }
   });
+  Object.defineProperty(proto, 'duration', { configurable: true,
+    get() { const fr = frames.get(this); return fr ? fr.duration : nativeDuration.get.call(this); } });
+  function showFrame(m, fr) {
+    const idx = Math.max(0, Math.min(fr.count - 1, Math.round(position(m, state(m)) * fr.fps)));
+    const src = 'url("' + fr.base + String(idx).padStart(5, '0') + '.jpg")';
+    if (m.style.backgroundImage !== src) {
+      m.style.backgroundImage = src;
+      m.style.backgroundSize = 'cover';
+      m.style.backgroundPosition = 'center';
+    }
+  }
   async function syncMedia() {
     await Promise.all(Array.from(document.querySelectorAll('audio,video')).map(async m => {
+      const fr = frames.get(m);
+      if (fr) { showFrame(m, fr); return; }
       if (m.readyState < 1) return;
       const s = state(m), target = position(m, s);
       nativePause.call(m);
@@ -131,5 +146,19 @@
   }
   window.addEventListener('error', e => report(e.error || e.message));
   window.addEventListener('unhandledrejection', e => report(e.reason || 'Unhandled rejection'));
-  window.__hvl = { step, delay, faults, now: () => now };
+  function useFrames(map) {
+    for (const m of document.querySelectorAll('video')) {
+      const src = m.currentSrc || m.src || (m.querySelector('source[src]') || {}).src;
+      const info = map[src];
+      if (!info) continue;
+      const fr = { base: info.base, fps: info.fps, count: info.count,
+        duration: Number.isFinite(m.duration) ? m.duration : 0 };
+      frames.set(m, fr);
+      m.removeAttribute('src');
+      m.removeAttribute('poster');
+      m.load();
+      showFrame(m, fr);
+    }
+  }
+  window.__hvl = { step, delay, useFrames, faults, now: () => now };
 })();
