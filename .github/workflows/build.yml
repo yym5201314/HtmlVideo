@@ -1,0 +1,55 @@
+name: build
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compute version
+        id: ver
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $v = & .\scripts\ci-version.ps1 -RunNumber $env:GITHUB_RUN_NUMBER
+          "version=$v" >> $env:GITHUB_OUTPUT
+          "tag=v$v" >> $env:GITHUB_OUTPUT
+      - name: Compile
+        shell: pwsh
+        run: python build.py --version ${{ steps.ver.outputs.version }}
+      - name: Upload EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: HtmlVideoLite-${{ steps.ver.outputs.version }}
+          path: dist/*.exe
+          if-no-files-found: error
+      - name: Release
+        if: >-
+          (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+          (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $existing = & git ls-remote --tags origin "refs/tags/$env:RELEASE_TAG"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not query remote tags' }
+          if ($existing) { Write-Host 'Tag already exists'; exit 0 }
+          $asset = "dist/HtmlVideoLite-$env:RELEASE_TAG.exe"
+          Copy-Item -LiteralPath dist/HtmlVideoLite.exe -Destination $asset
+          gh release create $env:RELEASE_TAG $asset --title "HTML Video Lite $env:RELEASE_TAG" --target '${{ github.sha }}' --generate-notes --latest
+          if ($LASTEXITCODE -ne 0) { throw 'Release failed' }

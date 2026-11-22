@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<title>Animation integration fixture</title>
+<style>
+html,body { margin:0; background:#fff; }
+#stage { position:relative; width:640px; height:360px; overflow:hidden; background:#f4f6f8; }
+#box { position:absolute; top:100px; width:80px; height:80px; background:#d32645; }
+#css { position:absolute; top:220px; width:60px; height:60px; background:#14875a; animation:slide 1s linear infinite alternate; }
+@keyframes slide { from { transform:translateX(0) } to { transform:translateX(500px) } }
+h1 { font:24px sans-serif; padding:16px; margin:0; }
+</style>
+<div id="stage"><h1>HTML animation / 中文路径</h1><div id="box"></div><div id="css"></div></div>
+<button id="startBtn">开始播放</button>
+<script>
+const TOTAL = 1.2;
+let clicks = 0;
+document.querySelector('#startBtn').onclick = () => {
+  if (++clicks > 1) throw Error('Start button clicked more than once');
+  const beginning = performance.now();
+  function draw(t) {
+    document.querySelector('#box').style.left = ((t-beginning)/1200*500)+'px';
+    if (t-beginning < 1200) requestAnimationFrame(draw);
+  }
+  requestAnimationFrame(draw);
+  let ticks = 0;
+  const id = setInterval((expected) => {
+    if (expected !== 42) throw Error('Timer arguments lost');
+    if (++ticks === 3) clearInterval(id);
+  }, 100, 42);
+  setTimeout(() => {
+    if (ticks !== 3) throw Error('Virtual timer cancellation/order incorrect: ' + ticks);
+  }, 450);
+};
+</script>
+</html>
