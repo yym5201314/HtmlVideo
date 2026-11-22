@@ -35,21 +35,21 @@ namespace HtmlVideoLite
             }
         }
 
-        internal async Task<Dictionary<string, object>> Call(string method, object parameters)
+        internal async Task<Dictionary<string, object>> Call(string method, object parameters, int timeoutMs = 60000)
         {
-            try { return await Send(method, parameters).ConfigureAwait(false); }
+            try { return await Send(method, parameters, timeoutMs).ConfigureAwait(false); }
             catch (OperationCanceledException)
             {
                 if (cancel.IsCancellationRequested) throw;
-                throw new TimeoutException("浏览器操作超过 60 秒：" + method);
+                throw new TimeoutException("浏览器操作超过 " + timeoutMs / 1000 + " 秒：" + method);
             }
         }
 
-        async Task<Dictionary<string, object>> Send(string method, object parameters)
+        async Task<Dictionary<string, object>> Send(string method, object parameters, int timeoutMs)
         {
             using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancel))
             {
-                timeout.CancelAfter(60000);
+                timeout.CancelAfter(timeoutMs);
                 int id = ++sequence;
                 byte[] request = Encoding.UTF8.GetBytes(Json.Serialize(new { id = id, method = method, @params = parameters }));
                 await socket.SendAsync(new ArraySegment<byte>(request), WebSocketMessageType.Text, true, timeout.Token).ConfigureAwait(false);

@@ -17,7 +17,7 @@ namespace HtmlVideoLite
         internal string Input = "", Output = "", Audio = "", Browser = "", Ffmpeg = "", Stage = "", Start = "";
         internal int Width = 1920, Height = 1080, Fps = 30, Crf = 18;
         internal double Duration;
-        internal bool Fit = true, Hide = true, Mute, Overwrite;
+        internal bool Fit = true, Hide = true, Fast = true, Mute, Overwrite;
     }
 
     internal sealed class Update
@@ -147,8 +147,12 @@ namespace HtmlVideoLite
                 }
             }
             Uri uri;
-            if (Uri.TryCreate(source, UriKind.Absolute, out uri) && uri.IsFile && File.Exists(uri.LocalPath))
-                return uri.LocalPath;
+            if (Uri.TryCreate(source, UriKind.Absolute, out uri) && uri.IsFile)
+            {
+                if (File.Exists(uri.LocalPath)) return uri.LocalPath;
+                progress(new Update(3, "警告：页面音轨文件不存在：" + uri.LocalPath + "；输出将无声。"));
+                return "";
+            }
             if (!string.IsNullOrEmpty(source))
                 progress(new Update(3, "提示：页面音轨不是本地文件；请在音频栏指定文件，否则输出无声。"));
             return "";
@@ -163,11 +167,13 @@ namespace HtmlVideoLite
             BrowserProcess browser = null;
             Process encoder = null;
             Cdp page = null;
+            Cdp screenshots = null;
             using (var job = new ProcessJob())
             {
                 try
                 {
                     browser = await BrowserProcess.Start(o, work, progress, token).ConfigureAwait(false);
+                    string pageEndpoint;
                     using (var root = new Cdp(token))
                     {
                         await root.Connect(browser.Endpoint).ConfigureAwait(false);
@@ -175,9 +181,11 @@ namespace HtmlVideoLite
                         string targetId = Convert.ToString(target["targetId"]);
                         page = new Cdp(token);
                         var endpoint = new Uri(browser.Endpoint);
-                        await page.Connect("ws://127.0.0.1:" + endpoint.Port + "/devtools/page/" + targetId).ConfigureAwait(false);
+                        pageEndpoint = "ws://127.0.0.1:" + endpoint.Port + "/devtools/page/" + targetId;
+                        await page.Connect(pageEndpoint).ConfigureAwait(false);
                     }
                     await page.Call("Page.enable", new { }).ConfigureAwait(false);
+                    await page.Call("Page.bringToFront", new { }).ConfigureAwait(false);
                     await page.Call("Emulation.setDeviceMetricsOverride", new {
                         width = o.Width, height = o.Height, deviceScaleFactor = 1, mobile = false
                     }).ConfigureAwait(false);
@@ -201,21 +209,25 @@ namespace HtmlVideoLite
                     progress(new Update(3, "舞台：" + preparation["stage"] + "；" + preparation["playback"]));
                     if (Convert.ToInt32(preparation["missing"]) > 0)
                         progress(new Update(3, "警告：存在未加载的图片，请检查资源路径或网络。"));
+                    var missing = (System.Collections.IList)await page.Evaluate("window.__hvl.missing()").ConfigureAwait(false);
+                    foreach (object resource in missing)
+                        progress(new Update(3, "素材未加载：" + resource));
                     string audio = await Audio(page, o, work, progress).ConfigureAwait(false);
                     if (audio.Length > 0 && string.Equals(audio, o.Output, StringComparison.OrdinalIgnoreCase))
                         throw new ArgumentException("输出文件不能覆盖页面引用的音视频资源。");
                     int frames = Math.Max(1, (int)Math.Ceiling(duration * o.Fps - 1e-9));
                     double encodedDuration = (double)frames / o.Fps;
                     string temporaryVideo = Path.Combine(work, "render.mp4");
+                    progress(new Update(3, o.Fast ? "快速模式：JPEG 95 + veryfast 编码（轻微有损）。" : "精细模式：PNG + medium 编码。"));
                     var args = new List<string> {
                         "-hide_banner", "-loglevel", "error", "-y",
-                        "-f", "image2pipe", "-vcodec", "png", "-framerate", o.Fps.ToString(CultureInfo.InvariantCulture), "-i", "pipe:0"
+                        "-f", "image2pipe", "-vcodec", o.Fast ? "mjpeg" : "png", "-framerate", o.Fps.ToString(CultureInfo.InvariantCulture), "-i", "pipe:0"
                     };
                     if (audio.Length > 0) args.AddRange(new[] { "-stream_loop", "-1", "-i", audio });
                     args.AddRange(new[] { "-map", "0:v:0" });
                     if (audio.Length > 0) args.AddRange(new[] { "-map", "1:a:0", "-c:a", "aac", "-b:a", "192k" });
                     args.AddRange(new[] {
-                        "-c:v", "libx264", "-preset", "medium", "-crf", o.Crf.ToString(CultureInfo.InvariantCulture),
+                        "-c:v", "libx264", "-preset", o.Fast ? "veryfast" : "medium", "-crf", o.Crf.ToString(CultureInfo.InvariantCulture),
                         "-pix_fmt", "yuv420p", "-t", encodedDuration.ToString("0.########", CultureInfo.InvariantCulture),
                         "-movflags", "+faststart", temporaryVideo
                     });
@@ -229,15 +241,40 @@ namespace HtmlVideoLite
                     byte[] first = null;
                     int changed = 0;
                     var watch = Stopwatch.StartNew();
+                    screenshots = new Cdp(token);
+                    await screenshots.Connect(pageEndpoint).ConfigureAwait(false);
+                    bool clipped = false;
                     using (token.Register(() => { try { if (!encoder.HasExited) encoder.Kill(); } catch (InvalidOperationException) { } }))
                     {
                         for (int i = 0; i < frames; i++)
                         {
                             token.ThrowIfCancellationRequested();
                             if (i > 0) await page.Evaluate("window.__hvl.step(" + (1000.0 / o.Fps).ToString("R", CultureInfo.InvariantCulture) + ")").ConfigureAwait(false);
-                            var capture = await page.Call("Page.captureScreenshot", new {
-                                format = "png", fromSurface = true, captureBeyondViewport = false
-                            }).ConfigureAwait(false);
+                            var captureOptions = new Dictionary<string, object> {
+                                { "format", o.Fast ? "jpeg" : "png" }, { "fromSurface", true },
+                                { "captureBeyondViewport", clipped }, { "optimizeForSpeed", o.Fast }
+                            };
+                            if (clipped) captureOptions["clip"] = new { x = 0, y = 0, width = o.Width, height = o.Height, scale = 1 };
+                            if (o.Fast) captureOptions["quality"] = 95;
+                            Dictionary<string, object> capture = null;
+                            try { capture = await screenshots.Call("Page.captureScreenshot", captureOptions, 15000).ConfigureAwait(false); }
+                            catch (TimeoutException)
+                            {
+                                if (clipped) throw new TimeoutException("第 " + (i + 1) + " 帧截图失败，备用捕获也已超时。请尝试 1280×720、其他浏览器，并检查页面素材。");
+                            }
+                            if (capture == null)
+                            {
+                                // A cancelled WebSocket receive cannot be reused. Keep page control on its own connection.
+                                screenshots.Dispose();
+                                screenshots = new Cdp(token);
+                                await screenshots.Connect(pageEndpoint).ConfigureAwait(false);
+                                clipped = true;
+                                captureOptions["captureBeyondViewport"] = true;
+                                captureOptions["clip"] = new { x = 0, y = 0, width = o.Width, height = o.Height, scale = 1 };
+                                progress(new Update(3 + i * 92 / frames, "第 " + (i + 1) + " 帧截图超时，重建连接并尝试显式区域捕获…"));
+                                try { capture = await screenshots.Call("Page.captureScreenshot", captureOptions, 15000).ConfigureAwait(false); }
+                                catch (TimeoutException) { throw new TimeoutException("第 " + (i + 1) + " 帧两种截图方式均超时。请尝试 1280×720、其他浏览器，并检查页面素材。"); }
+                            }
                             byte[] png = System.Convert.FromBase64String((string)capture["data"]);
                             if (first == null) first = png;
                             else if (!first.SequenceEqual(png)) changed++;
@@ -266,6 +303,8 @@ namespace HtmlVideoLite
                     if (faults.Count > 0) progress(new Update(97, "页面脚本警告：" + string.Join("\r\n", faults.Cast<object>().Select(x => Convert.ToString(x)))));
                     if (changed == 0 && frames > 1) progress(new Update(97, "警告：画面完全静止，请检查播放入口；静态 HTML 可忽略。"));
                     // Release media handles before publishing over an existing output.
+                    screenshots.Dispose();
+                    screenshots = null;
                     page.Dispose();
                     page = null;
                     job.Dispose();
@@ -294,6 +333,7 @@ namespace HtmlVideoLite
                 finally
                 {
                     if (page != null) page.Dispose();
+                    if (screenshots != null) screenshots.Dispose();
                     job.Dispose();
                     if (encoder != null) { encoder.WaitForExit(5000); encoder.Dispose(); }
                     if (browser != null) browser.Dispose();

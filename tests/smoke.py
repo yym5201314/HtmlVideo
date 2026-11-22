@@ -64,6 +64,15 @@ def main():
     assert green_center(frames[0]) < 100
     assert green_center(frames[8]) > 350
     assert not any("页面脚本警告" in m for m in data["messages"]), data
+    _, precise = convert("precise", "animation.html", True, "--precise", "--mute")
+    assert any("PNG + medium" in m for m in precise["messages"]), precise
+    missing_html = RESULTS / "missing.html"
+    missing_html.write_text(
+        '<!doctype html><body data-duration="0.2"><img src="missing-image.jpg">'
+        '<audio src="missing-audio.wav"></audio></body>', encoding="utf-8")
+    _, missing = convert("missing-resources", str(missing_html))
+    assert any("素材未加载：" in m and "missing-image.jpg" in m for m in missing["messages"]), missing
+    assert any("音轨文件不存在" in m and "missing-audio.wav" in m for m in missing["messages"]), missing
     tone = RESULTS / "音频.wav"
     with wave.open(str(tone), "wb") as wav:
         wav.setparams((1, 2, 22050, 0, "NONE", "not compressed"))

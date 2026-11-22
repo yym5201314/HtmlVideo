@@ -106,3 +106,12 @@ window.__hvl.audio = function () {
   const m = document.querySelector('audio[src],audio source[src],video[src],video source[src]');
   return m ? (m.currentSrc || m.src) : '';
 };
+
+window.__hvl.missing = function () {
+  const resources = [];
+  for (const im of document.images)
+    if (!im.naturalWidth) resources.push(im.currentSrc || im.src);
+  for (const m of document.querySelectorAll('audio,video'))
+    if (m.error || m.readyState < 2) resources.push(m.currentSrc || m.src);
+  return Array.from(new Set(resources.filter(Boolean))).slice(0, 20);
+};

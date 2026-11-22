@@ -13,7 +13,7 @@ namespace HtmlVideoLite
 {
     internal static class Program
     {
-        internal const string APP_VERSION = "1.0.1";
+        internal const string APP_VERSION = "1.0.2";
 
         [STAThread]
         static int Main(string[] args)
@@ -31,7 +31,7 @@ namespace HtmlVideoLite
             try
             {
                 var values = new Dictionary<string, string>();
-                var flags = new HashSet<string> { "--mute", "--no-fit", "--keep-controls", "--overwrite", "--help" };
+                var flags = new HashSet<string> { "--mute", "--no-fit", "--keep-controls", "--overwrite", "--help", "--precise" };
                 for (int i = 0; i < args.Length; i++)
                 {
                     if (!args[i].StartsWith("--") || values.ContainsKey(args[i]))
@@ -53,7 +53,7 @@ namespace HtmlVideoLite
                 report = Get(values, "--report", "");
                 if (values.ContainsKey("--help"))
                 {
-                    updates.Add("HtmlVideoLite --input page.html [--output video.mp4] [--duration 10] [--width 1920 --height 1080 --fps 30 --crf 18] [--audio bgm.mp3 | --mute] [--stage #stage --start #play] [--no-fit --keep-controls --overwrite] [--browser path --ffmpeg path] [--report result.json]");
+                    updates.Add("HtmlVideoLite --input page.html [--output video.mp4] [--duration 10] [--width 1920 --height 1080 --fps 30 --crf 18] [--precise] [--audio bgm.mp3 | --mute] [--stage #stage --start #play] [--no-fit --keep-controls --overwrite] [--browser path --ffmpeg path] [--report result.json]");
                     SaveReport(report, true, "", updates, "");
                     return 0;
                 }
@@ -68,7 +68,7 @@ namespace HtmlVideoLite
                     Ffmpeg = Get(values, "--ffmpeg", ""), Stage = Get(values, "--stage", ""),
                     Start = Get(values, "--start", ""), Fit = !values.ContainsKey("--no-fit"),
                     Hide = !values.ContainsKey("--keep-controls"), Mute = values.ContainsKey("--mute"),
-                    Overwrite = values.ContainsKey("--overwrite")
+                    Overwrite = values.ContainsKey("--overwrite"), Fast = !values.ContainsKey("--precise")
                 };
                 string output = Engine.ConvertVideo(o, u => {
                     if (u.Percent <= 3 || u.Percent >= 96) updates.Add(u.Message);
@@ -107,6 +107,7 @@ namespace HtmlVideoLite
         readonly CheckBox fit = new CheckBox { Text = "舞台等比适配", Checked = true, AutoSize = true };
         readonly CheckBox hide = new CheckBox { Text = "隐藏舞台外控件", Checked = true, AutoSize = true };
         readonly CheckBox mute = new CheckBox { Text = "无音轨", AutoSize = true };
+        readonly CheckBox fast = new CheckBox { Text = "快速模式", Checked = true, AutoSize = true };
         readonly Button run = new Button { Text = "开始转换", AutoSize = true };
         readonly Button cancel = new Button { Text = "取消", AutoSize = true, Enabled = false };
         readonly Button open = new Button { Text = "打开视频", AutoSize = true, Enabled = false };
@@ -188,7 +189,7 @@ namespace HtmlVideoLite
             AddRow(table, "舞台选择器", stage, null);
             AddRow(table, "播放选择器", start, null);
             var toggles = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, WrapContents = false };
-            toggles.Controls.AddRange(new Control[] { fit, hide, mute });
+            toggles.Controls.AddRange(new Control[] { fit, hide, mute, fast });
             AddRow(table, "", toggles, null);
             var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
             run.Padding = new Padding(14, 2, 14, 2);
@@ -203,6 +204,7 @@ namespace HtmlVideoLite
             tips.SetToolTip(start, "CSS 选择器，例如 #startBtn；留空识别播放按钮。");
             tips.SetToolTip(audio, "留空使用 HTML 中的本地或内嵌音轨；短音轨循环到视频结束。");
             tips.SetToolTip(crf, "数值越小质量越高、文件越大。");
+            tips.SetToolTip(fast, "JPEG 95 截图 + veryfast 编码，有轻微有损压缩；关闭后使用 PNG + medium。");
             tips.SetToolTip(width, "宽高必须是偶数。");
             tips.SetToolTip(input, "支持拖入 HTML 文件。");
             browser.Text = Engine.Browser(); ffmpeg.Text = Engine.Ffmpeg();
@@ -267,7 +269,7 @@ namespace HtmlVideoLite
                 Input = input.Text.Trim(), Output = output.Text.Trim(), Audio = audio.Text.Trim(),
                 Browser = browser.Text.Trim(), Ffmpeg = ffmpeg.Text.Trim(), Stage = stage.Text.Trim(), Start = start.Text.Trim(),
                 Width = (int)width.Value, Height = (int)height.Value, Fps = (int)fps.Value,
-                Duration = (double)duration.Value, Crf = (int)crf.Value, Fit = fit.Checked, Hide = hide.Checked, Mute = mute.Checked
+                Duration = (double)duration.Value, Crf = (int)crf.Value, Fit = fit.Checked, Hide = hide.Checked, Mute = mute.Checked, Fast = fast.Checked
             };
             if (File.Exists(o.Output))
             {

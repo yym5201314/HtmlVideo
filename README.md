@@ -19,7 +19,7 @@
 
 **约 75 KB 是程序本体，不是包含所有依赖的完整包。** 双击本体不需要 Node 或 Python，但转换需要已安装的 Edge/Chrome，以及 FFmpeg。此处未通过自解压或隐藏下载伪装成无依赖程序。
 
-本地 FFmpeg 是从旧项目复用的 2018 年构建，只用于保留既有编码环境与本地验证，不代表推荐的新版本。也可以在界面选择自己的 FFmpeg；需支持 `libx264`、AAC 和 PNG 解码。程序不自动联网下载或安装依赖。
+本地 FFmpeg 是从旧项目复用的 2018 年构建，只用于保留既有编码环境与本地验证，不代表推荐的新版本。也可以在界面选择自己的 FFmpeg；需支持 `libx264`、AAC、MJPEG 和 PNG 解码。程序不自动联网下载或安装依赖。
 
 Windows 10/11、.NET Framework 4.8 和 Edge/Chrome 为目标环境；最终测试环境见 `VERIFICATION.md`。分发时保留如下结构，或自行选择现有 FFmpeg：
 
@@ -39,7 +39,7 @@ FFmpeg 搜索顺序：`H2V_FFMPEG`、EXE 同目录、EXE 旁 `tools/`、EXE 上�
 
 ## 功能
 
-- 真正的离屏逐帧渲染，不录制桌面、不要求窗口前台、不产生逐帧 PNG 文件。
+- 真正的离屏逐帧渲染，不录制桌面、不要求窗口前台、不产生逐帧图片文件。
 - JS `requestAnimationFrame`、定时器、`Date.now`、`performance.now` 和 CSS / Web Animations 时间推进。
 - 横屏、竖屏、自定义偶数宽高，1–120 fps、0.2–3600 秒、CRF 0–51。
 - 自动读取页面时长变量、分镜数组、`data-duration`、时间码、媒体或有限 CSS 动画时长。无法可靠识别时明确要求手工填写，不猜测、不自动截断。
@@ -50,6 +50,14 @@ FFmpeg 搜索顺序：`H2V_FFMPEG`、EXE 同目录、EXE 旁 `tools/`、EXE 上�
 - 转换成功后才发布最终文件，取消或编码失败不会覆盖原输出。子进程放入私有 Windows Job，退出时只清理本程序创建的进程树。
 
 ## 使用边界
+
+### 1.0.2 速度与截图超时
+
+默认启用快速模式：JPEG 95 截图、速度优先的截图编码、FFmpeg `veryfast` 预设。JPEG 有轻微有损压缩，字体边缘或精细图形可能受影响；取消“快速模式”（命令行 `--precise`）恢复 PNG + `medium`。两种模式最终均编码为 H.264，PNG 模式不代表最终视频无损。更快预设可能增大输出文件。
+
+截图使用独立调试连接，并激活浏览器内部录制标签页（不显示桌面窗口）。单帧截图超过 15 秒时，关闭失效连接，重建连接并对同一帧尝试显式区域截图；成功后继续使用备用方式，不跳帧、不重新开始时间轴。备用截图也超过 15 秒则明确报出帧号，不无限等待。此处理不保证修复浏览器渲染进程本身的卡死。两种截图均使用表面捕获；实测此环境下 `fromSurface=false` 会返回黑图，未采用该路径。
+
+日志列出最多 20 条未加载的图片 / 媒体路径，本地音轨不存在会明确提示，不再误报成“不是本地文件”。缺失素材不会被自动替换。建议先修复素材，再用 1280×720、24 fps 试转；在相同片长下像素与帧数越少，需要的截图工作越少。
 
 HTML 是任意程序，无法保证所有页面都能完全自动化。以下情况应先调整页面或配置：
 
@@ -75,7 +83,7 @@ $p = Start-Process .\dist\HtmlVideoLite.exe -ArgumentList ($args | ForEach-Objec
 $p.ExitCode
 ```
 
-其余参数：`--audio 文件`、`--mute`、`--browser EXE`、`--ffmpeg EXE`、`--stage 选择器`、`--start 选择器`、`--no-fit`、`--keep-controls`、`--overwrite`。未指定 `--overwrite` 时拒绝覆盖现有文件；时长 0 为自动识别。GUI 会先询问是否覆盖。
+其余参数：`--precise`（关闭快速模式）、`--audio 文件`、`--mute`、`--browser EXE`、`--ffmpeg EXE`、`--stage 选择器`、`--start 选择器`、`--no-fit`、`--keep-controls`、`--overwrite`。未指定 `--overwrite` 时拒绝覆盖现有文件；时长 0 为自动识别。GUI 会先询问是否覆盖。
 
 固定帧率的时长取 `ceil(时长 × 帧率) / 帧率`，最多向上补不足一帧。
 
@@ -91,7 +99,7 @@ python tests/harness.py
 
 `build.py --version 1.0.23` 可覆盖构建版本，不修改源码或 VERSION。构建超过 300 KB 直接失败。验证数据和截图放 `build/smoke/`，不会编入 EXE。
 
-GitHub Actions 已配置 main/master 推送、PR 和手动构建，版本号为 `MAJOR.MINOR.RUN_NUMBER`，发布前检查远端同名 tag，Release 仅包含 ASCII 命名 EXE。不上传 FFmpeg 或浏览器。仓库只跟踪源码、构建脚本、工作流、说明文档和测试夹具；EXE 与测试生成数据由本地构建或 CI 生成。
+GitHub Actions 已配置 main/master 推送、PR 和手动构建，版本号为 `MAJOR.MINOR.RUN_NUMBER`，发布前检查远端同名 tag。构建产物仅上传至 Releases，不上传 Actions Artifacts；PR 只编译、不发布。Release 仅包含 ASCII 命名 EXE，不上传 FFmpeg 或浏览器。仓库只跟踪源码、构建脚本、工作流、说明文档和测试夹具；EXE 与测试生成数据由本地构建或 CI 生成。提交和推送由用户手动操作，不由助手主动执行。
 
 ## 第三方编码器
 
