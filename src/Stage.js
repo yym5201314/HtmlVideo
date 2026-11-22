@@ -119,3 +119,38 @@ window.__hvl.missing = function () {
     if (m.error || m.readyState < 2) resources.push(m.currentSrc || m.src);
   return Array.from(new Set(resources.filter(Boolean))).slice(0, 20);
 };
+
+window.__hvl.videos = function () {
+  const seen = new Set();
+  const out = [];
+  for (const m of document.querySelectorAll('video')) {
+    const src = m.currentSrc || m.src || (m.querySelector('source[src]') || {}).src;
+    if (!src || seen.has(src)) continue;
+    seen.add(src);
+    out.push({ src: src, duration: Number.isFinite(m.duration) ? m.duration : 0,
+               width: m.videoWidth || 0, height: m.videoHeight || 0 });
+  }
+  return out;
+};
+
+// Swap long videos to pre-built all-keyframe proxies so the virtual clock can seek
+// them frame-by-frame without re-decoding whole GOPs. Keys are resolved source URLs.
+window.__hvl.applyProxy = async function (map) {
+  const swaps = [];
+  for (const m of document.querySelectorAll('video')) {
+    const src = m.currentSrc || m.src || (m.querySelector('source[src]') || {}).src;
+    if (src && map[src]) {
+      m.src = map[src];
+      m.load();
+      swaps.push(m);
+    }
+  }
+  if (!swaps.length) return false;
+  const ready = m => m.readyState >= 2 || !!m.error;
+  await Promise.all(swaps.map(m => new Promise(resolve => {
+    if (ready(m)) return resolve();
+    m.addEventListener('loadeddata', resolve, { once: true });
+    m.addEventListener('error', resolve, { once: true });
+  })));
+  return true;
+};
