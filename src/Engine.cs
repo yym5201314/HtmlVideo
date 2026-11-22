@@ -157,12 +157,12 @@ namespace HtmlVideoLite
             }
         }
 
-        static async Task<string> Audio(Cdp page, Options o, string work, Action<Update> progress, ProcessJob job, CancellationToken token, string[] pageSources)
+        static async Task<string> Audio(Cdp page, Options o, string work, Action<Update> progress, ProcessJob job, CancellationToken token)
         {
             if (o.Mute) return "";
             bool explicitAudio = !string.IsNullOrWhiteSpace(o.Audio);
             var sources = explicitAudio ? new[] { new Uri(Path.GetFullPath(o.Audio)).AbsoluteUri } :
-                (pageSources ?? ((System.Collections.IList)await page.Evaluate("window.__hvl.audio()").ConfigureAwait(false)).Cast<object>().Select(Convert.ToString).ToArray());
+                ((System.Collections.IList)await page.Evaluate("window.__hvl.audio()").ConfigureAwait(false)).Cast<object>().Select(Convert.ToString).ToArray();
             foreach (string source in sources)
             {
                 token.ThrowIfCancellationRequested();
@@ -199,44 +199,6 @@ namespace HtmlVideoLite
             }
             if (sources.Length > 0) progress(new Update(3, "警告：未找到可用音轨，输出将无声；可在音频栏指定文件。"));
             return "";
-        }
-
-        // Re-encode a local video into a low-resolution, all-keyframe proxy so the
-        // virtual clock can seek it frame-by-frame without re-decoding whole GOPs.
-        static async Task<string> ProxyVideo(string path, double duration, Options o, string work, ProcessJob job, CancellationToken token)
-        {
-            string proxy = Path.Combine(work, "proxy-" + Guid.NewGuid().ToString("N") + ".mp4");
-            string vf = string.Format(CultureInfo.InvariantCulture,
-                "scale='min(iw,{0})':'min(ih,{1})':force_original_aspect_ratio=decrease,scale='trunc(iw/2)*2':'trunc(ih/2)*2'",
-                o.Width, o.Height);
-            var args = new List<string> {
-                "-hide_banner", "-loglevel", "error", "-y", "-nostdin", "-i", path,
-                "-map", "0:v:0", "-vf", vf,
-                "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
-                "-g", "1", "-keyint_min", "1", "-sc_threshold", "0",
-                "-pix_fmt", "yuv420p", proxy
-            };
-            var info = StartInfo(o.Ffmpeg, args);
-            info.RedirectStandardError = true;
-            info.StandardErrorEncoding = Encoding.UTF8;
-            int timeoutMs = Math.Max(180000, Math.Min(1800000, (int)Math.Ceiling(duration * 10) * 1000));
-            using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(token))
-            using (var process = Process.Start(info))
-            {
-                job.Add(process);
-                timeout.CancelAfter(timeoutMs);
-                Task<string> error = process.StandardError.ReadToEndAsync();
-                using (timeout.Token.Register(() => { try { if (!process.HasExited) process.Kill(); } catch (InvalidOperationException) { } }))
-                {
-                    while (!process.HasExited) await Task.Delay(100).ConfigureAwait(false);
-                    string detail = await error.ConfigureAwait(false);
-                    token.ThrowIfCancellationRequested();
-                    if (timeout.IsCancellationRequested) throw new TimeoutException("视频代理生成超过 " + timeoutMs / 1000 + " 秒：" + path);
-                    if (process.ExitCode != 0 || !File.Exists(proxy))
-                        throw new IOException("视频代理生成失败：" + (string.IsNullOrWhiteSpace(detail) ? "退出码 " + process.ExitCode : detail.Trim()));
-                }
-            }
-            return proxy;
         }
 
         internal static async Task<string> ConvertVideo(Options o, Action<Update> progress, CancellationToken token)
@@ -293,46 +255,7 @@ namespace HtmlVideoLite
                     var missing = (System.Collections.IList)await page.Evaluate("window.__hvl.missing()").ConfigureAwait(false);
                     foreach (object resource in missing)
                         progress(new Update(3, "素材未加载：" + resource));
-                    string[] pageSources = null;
-                    if (!o.Mute)
-                    {
-                        try { pageSources = ((System.Collections.IList)await page.Evaluate("window.__hvl.audio()").ConfigureAwait(false)).Cast<object>().Select(Convert.ToString).ToArray(); }
-                        catch { }
-                    }
-                    try
-                    {
-                        var videos = (System.Collections.IList)await page.Evaluate("window.__hvl.videos()").ConfigureAwait(false);
-                        var proxy = new Dictionary<string, string>();
-                        foreach (object entry in videos)
-                        {
-                            var video = (Dictionary<string, object>)entry;
-                            string src = Convert.ToString(video["src"]);
-                            double videoDuration = Convert.ToDouble(video["duration"], CultureInfo.InvariantCulture);
-                            if (videoDuration < 3) continue;
-                            Uri uri;
-                            if (!Uri.TryCreate(src, UriKind.Absolute, out uri) || !uri.IsFile) continue;
-                            string path = uri.LocalPath;
-                            if (!File.Exists(path)) continue;
-                            progress(new Update(3, "生成视频代理（加速寻帧）：" + path));
-                            try
-                            {
-                                string proxied = await ProxyVideo(path, videoDuration, o, work, job, token).ConfigureAwait(false);
-                                proxy[src] = new Uri(proxied).AbsoluteUri;
-                                progress(new Update(3, "视频代理就绪：" + path));
-                            }
-                            catch (Exception e)
-                            {
-                                progress(new Update(3, "视频代理生成失败，改用原视频：" + path + "（" + e.Message.Split('\n')[0] + "）"));
-                            }
-                        }
-                        if (proxy.Count > 0)
-                            await page.Evaluate("window.__hvl.applyProxy(" + Cdp.Json.Serialize(proxy) + ")").ConfigureAwait(false);
-                    }
-                    catch (Exception e)
-                    {
-                        progress(new Update(3, "视频代理处理跳过：" + e.Message.Split('\n')[0]));
-                    }
-                    string audio = await Audio(page, o, work, progress, job, token, pageSources).ConfigureAwait(false);
+                    string audio = await Audio(page, o, work, progress, job, token).ConfigureAwait(false);
                     if (audio.Length > 0 && string.Equals(audio, o.Output, StringComparison.OrdinalIgnoreCase))
                         throw new ArgumentException("输出文件不能覆盖页面引用的音视频资源。");
                     int frames = Math.Max(1, (int)Math.Ceiling(duration * o.Fps - 1e-9));

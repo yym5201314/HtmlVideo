@@ -62,7 +62,8 @@ namespace HtmlVideoLite
                 "--autoplay-policy=no-user-gesture-required", "--mute-audio", "--hide-scrollbars",
                 "--force-device-scale-factor=1", "--force-color-profile=srgb",
                 "--allow-file-access-from-files", "--disable-background-timer-throttling",
-                "--disable-renderer-backgrounding", "--window-size=" + options.Width + "," + options.Height
+                "--disable-renderer-backgrounding", "--disable-accelerated-video-decode",
+                "--disable-accelerated-video-encode", "--window-size=" + options.Width + "," + options.Height
             };
             if (string.Equals(Path.GetFileName(options.Browser), "msedge.exe", StringComparison.OrdinalIgnoreCase))
                 args.Add("--edge-skip-compat-layer-relaunch");
