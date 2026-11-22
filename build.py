@@ -14,8 +14,11 @@ def main():
     parser.add_argument("--version")
     args = parser.parse_args()
     version = args.version or (ROOT / "VERSION").read_text(encoding="utf-8").strip()
-    if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+    m = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", version)
+    if not m:
         raise SystemExit("Invalid version: " + version)
+    if int(m.group(3)) > 9:
+        raise SystemExit("Patch version must be 0-9 (bump the minor instead): " + version)
     if any(int(part) > 65534 for part in version.split(".")):
         raise SystemExit("Assembly version components must be <= 65534")
     compiler = pathlib.Path(r"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe")

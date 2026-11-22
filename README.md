@@ -107,9 +107,9 @@ $p.ExitCode
 python build.py
 ```
 
-`build.py --version 1.0.23` 可覆盖构建版本，不修改源码或 VERSION。构建超过 300 KB 直接失败。
+`build.py --version 1.0.9` 可覆盖构建版本，不修改源码或 VERSION。构建超过 300 KB 直接失败。
 
-GitHub Actions 已配置 main/master 推送、PR 和手动构建，版本号为 `MAJOR.MINOR.RUN_NUMBER`，发布前检查远端同名 tag。构建产物仅上传至 Releases，不上传 Actions Artifacts；PR 只编译、不发布。Release 仅包含 ASCII 命名 EXE，不上传 FFmpeg 或浏览器。仓库只跟踪源码、构建脚本、工作流和说明文档；EXE 与本地产物由本地构建或 CI 生成。提交和推送由用户手动操作，不由助手主动执行。
+GitHub Actions 已配置 main/master 推送、PR 和手动构建，版本号取自 VERSION 文件（`MAJOR.MINOR.PATCH`，patch 位 0-9，满 10 进位到 minor），发布前检查远端同名 tag。构建产物仅上传至 Releases，不上传 Actions Artifacts；PR 只编译、不发布。Release 仅包含 ASCII 命名 EXE，不上传 FFmpeg 或浏览器。仓库只跟踪源码、构建脚本、工作流和说明文档；EXE 与本地产物由本地构建或 CI 生成。提交和推送由用户手动操作，不由助手主动执行。
 
 ## 第三方编码器
 

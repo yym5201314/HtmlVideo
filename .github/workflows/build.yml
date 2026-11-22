@@ -25,7 +25,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $v = & .\scripts\ci-version.ps1 -RunNumber $env:GITHUB_RUN_NUMBER
+          $v = & .\scripts\ci-version.ps1
           "version=$v" >> $env:GITHUB_OUTPUT
           "tag=v$v" >> $env:GITHUB_OUTPUT
 
