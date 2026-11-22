@@ -2,6 +2,9 @@ window.__hvl.prepare = async function (options) {
   const clock = window.__hvl;
   // Initialize at t=0; preparation must not consume auto-playing opening frames.
   await clock.step(0);
+  // Self-updating content (canvas/video/GIF/SMIL) can repaint without any timer
+  // or animation, so it must disable the idle-screenshot shortcut.
+  clock.animated = !!document.querySelector('canvas,video,img[src*=".gif"],svg animate');
   const bounded = promise => Promise.race([promise, new Promise(r => clock.delay(r, 8000))]);
   if (document.fonts) await bounded(document.fonts.ready);
   await bounded(Promise.all(Array.from(document.images).filter(im => !im.complete).map(im =>
@@ -36,6 +39,16 @@ window.__hvl.prepare = async function (options) {
   }
   document.documentElement.style.overflow = 'hidden';
   document.body.style.overflow = 'hidden';
+  // Drop compositor layers for hidden frames so heavy pages keep GPU memory
+  // for the visible frame instead of dozens of off-screen layers.
+  if (!document.getElementById('__hvl_layers')) {
+    const layerStyle = document.createElement('style');
+    layerStyle.id = '__hvl_layers';
+    layerStyle.textContent = '.frame:not(.on),.frame:not(.on) *{will-change:auto !important;filter:none !important;' +
+      'backdrop-filter:none !important;-webkit-backdrop-filter:none !important}' +
+      '.frame:not(.on) .fx,.frame:not(.on) .fx *{display:none !important}';
+    (document.head || document.documentElement).appendChild(layerStyle);
+  }
   let playback = '自动播放 / 静态页面';
   let button = options.start ? document.querySelector(options.start) : null;
   if (options.start && !button) throw Error('Start selector did not match: ' + options.start);

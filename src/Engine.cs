@@ -350,6 +350,7 @@ namespace HtmlVideoLite
                     job.Add(encoder);
                     Task<string> error = encoder.StandardError.ReadToEndAsync();
                     byte[] first = null;
+                    byte[] previous = null;
                     int changed = 0;
                     var watch = Stopwatch.StartNew();
                     screenshots = new Cdp(token);
@@ -360,33 +361,61 @@ namespace HtmlVideoLite
                         for (int i = 0; i < frames; i++)
                         {
                             token.ThrowIfCancellationRequested();
-                            if (i > 0) await page.Evaluate("window.__hvl.step(" + (1000.0 / o.Fps).ToString("R", CultureInfo.InvariantCulture) + ")").ConfigureAwait(false);
+                            // The clock reports idle frames: no timer ran, no animation moved and
+                            // nothing self-updates, so the picture is byte-identical to the last one.
+                            bool idle = false;
+                            if (i > 0)
+                            {
+                                object state = await page.Evaluate("window.__hvl.step(" +
+                                    (1000.0 / o.Fps).ToString("R", CultureInfo.InvariantCulture) + ")").ConfigureAwait(false);
+                                var clock = state as Dictionary<string, object>;
+                                idle = clock != null && clock.ContainsKey("idle") && Convert.ToBoolean(clock["idle"]);
+                            }
+                            bool reuse = idle && previous != null;
                             var captureOptions = new Dictionary<string, object> {
                                 { "format", o.Fast ? "jpeg" : "png" }, { "fromSurface", true },
-                                { "captureBeyondViewport", clipped }, { "optimizeForSpeed", o.Fast }
+                                // captureBeyondViewport forces a full-page composite, which is the
+                                // slowest path on heavy pages; the clip below already pins the viewport.
+                                { "captureBeyondViewport", false }, { "optimizeForSpeed", o.Fast }
                             };
                             if (clipped) captureOptions["clip"] = new { x = 0, y = 0, width = o.Width, height = o.Height, scale = 1 };
                             if (o.Fast) captureOptions["quality"] = 95;
                             Dictionary<string, object> capture = null;
-                            try { capture = await screenshots.Call("Page.captureScreenshot", captureOptions, 15000).ConfigureAwait(false); }
-                            catch (TimeoutException)
+                            // A heavy frame can stall the compositor well past the default budget.
+                            // Escalate the capture mode instead of aborting the whole render.
+                            int timeoutMs = 20000;
+                            for (int attempt = 0; capture == null && !reuse; attempt++)
                             {
-                                if (clipped) throw new TimeoutException("第 " + (i + 1) + " 帧截图失败，备用捕获也已超时。请尝试 1280×720、其他浏览器，并检查页面素材。");
-                            }
-                            if (capture == null)
-                            {
+                                bool expired = false;
+                                try { capture = await screenshots.Call("Page.captureScreenshot", captureOptions, timeoutMs).ConfigureAwait(false); }
+                                catch (TimeoutException) { expired = true; }
+                                if (!expired) break;
+                                if (attempt >= 2) throw new TimeoutException("第 " + (i + 1) + " 帧截图连续 " +
+                                    (attempt + 1) + " 次超时。请尝试 1280×720、其他浏览器，并检查页面素材。");
                                 // A cancelled WebSocket receive cannot be reused. Keep page control on its own connection.
                                 screenshots.Dispose();
                                 screenshots = new Cdp(token);
                                 await screenshots.Connect(pageEndpoint).ConfigureAwait(false);
-                                clipped = true;
-                                captureOptions["captureBeyondViewport"] = true;
-                                captureOptions["clip"] = new { x = 0, y = 0, width = o.Width, height = o.Height, scale = 1 };
-                                progress(new Update(3 + i * 92 / frames, "第 " + (i + 1) + " 帧截图超时，重建连接并尝试显式区域捕获…"));
-                                try { capture = await screenshots.Call("Page.captureScreenshot", captureOptions, 15000).ConfigureAwait(false); }
-                                catch (TimeoutException) { throw new TimeoutException("第 " + (i + 1) + " 帧两种截图方式均超时。请尝试 1280×720、其他浏览器，并检查页面素材。"); }
+                                await Task.Delay(400, token).ConfigureAwait(false);
+                                timeoutMs = 40000;
+                                if (attempt == 0)
+                                {
+                                    clipped = true;
+                                    captureOptions["clip"] = new { x = 0, y = 0, width = o.Width, height = o.Height, scale = 1 };
+                                    progress(new Update(3 + i * 92 / frames, "第 " + (i + 1) + " 帧截图超时，重建连接并改截视口区域…"));
+                                }
+                                else
+                                {
+                                    // Format must stay fixed: the encoder pipe is already mjpeg or png.
+                                    // fromSurface must stay true: view capture returns a blank bitmap here.
+                                    if (o.Fast) captureOptions["quality"] = 70;
+                                    clipped = true;
+                                    captureOptions["clip"] = new { x = 0, y = 0, width = o.Width, height = o.Height, scale = 1 };
+                                    progress(new Update(3 + i * 92 / frames, "第 " + (i + 1) + " 帧仍超时，降低截图质量后重试…"));
+                                }
                             }
-                            byte[] png = System.Convert.FromBase64String((string)capture["data"]);
+                            byte[] png = reuse ? previous : System.Convert.FromBase64String((string)capture["data"]);
+                            if (!reuse) previous = png;
                             if (first == null) first = png;
                             else if (!first.SequenceEqual(png)) changed++;
                             try { await encoder.StandardInput.BaseStream.WriteAsync(png, 0, png.Length, token).ConfigureAwait(false); }

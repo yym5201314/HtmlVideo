@@ -8,6 +8,7 @@
   const timers = new Map(), rafs = new Map(), animations = new WeakMap();
   const mediaState = new WeakMap();
   const frames = new WeakMap();
+  let drivenFrame = null, drivenAnimations = [];
   const faults = [];
   const report = e => { faults.push(String(e.stack || e)); if (faults.length > 20) faults.shift(); };
   class VirtualDate extends RealDate {
@@ -106,15 +107,46 @@
     }));
   }
   function syncAnimations() {
-    for (const a of document.getAnimations()) {
-      if (!animations.has(a)) {
-        animations.set(a, { origin: now,
-          offset: typeof a.animationName === 'string' ? 0 : (Number(a.currentTime) || 0), rate: a.playbackRate });
-        a.pause();
+    const frame = document.querySelector('.frame.on');
+    let moving = false;
+    // Pages without a .frame.on marker drive every animation each tick.
+    if (!frame) {
+      drivenFrame = null;
+      drivenAnimations = [];
+      for (const a of document.getAnimations()) {
+        if (!animations.has(a)) {
+          animations.set(a, { origin: now,
+            offset: typeof a.animationName === 'string' ? 0 : (Number(a.currentTime) || 0), rate: a.playbackRate });
+          a.pause();
+        }
+        const s = animations.get(a);
+        const t = s.offset + (now - s.origin) * s.rate;
+        if (t !== s.last) { s.last = t; a.currentTime = t; if (s.rate) moving = true; }
       }
-      const s = animations.get(a);
-      a.currentTime = s.offset + (now - s.origin) * s.rate;
+      return moving;
     }
+    // Frame-based pages: rebuild the driven list only when the active frame
+    // changes, so per-tick work stays at one frame's effects instead of
+    // hundreds of hidden particles stalling Page.captureScreenshot.
+    if (frame !== drivenFrame) {
+      drivenFrame = frame;
+      drivenAnimations = [];
+      for (const a of document.getAnimations()) {
+        const target = a.effect && a.effect.target;
+        if (!animations.has(a)) {
+          animations.set(a, { origin: now,
+            offset: typeof a.animationName === 'string' ? 0 : (Number(a.currentTime) || 0), rate: a.playbackRate });
+          a.pause();
+        }
+        if (target && frame.contains(target)) drivenAnimations.push(a);
+      }
+    }
+    for (const a of drivenAnimations) {
+      const s = animations.get(a);
+      const t = s.offset + (now - s.origin) * s.rate;
+      if (t !== s.last) { s.last = t; a.currentTime = t; if (s.rate) moving = true; }
+    }
+    return moving;
   }
   async function step(ms) {
     syncAnimations();
@@ -141,18 +173,21 @@
       await Promise.resolve();
     }
     void document.documentElement.offsetHeight;
-    syncAnimations();
+    const moving = syncAnimations();
     await syncMedia();
     void document.documentElement.offsetHeight;
-    // Wait a real compositor frame so transform/opacity changes are committed
-    // before the CDP screenshot, otherwise some frames flicker with stale state.
+    // One compositor frame is enough: Page.captureScreenshot already forces the
+    // next commit, and a second rAF doubles the wait on heavy pages.
     await new Promise(resolve => {
       let settled = false;
       const done = () => { if (!settled) { settled = true; resolve(); } };
-      nativeRaf(() => nativeRaf(done));
+      nativeRaf(done);
       delay(done, 40);
     });
-    return now;
+    // Nothing timer-driven ran, no animation advanced and the page has no
+    // self-updating media, so this picture equals the previous one and the
+    // caller may reuse the last capture instead of paying for a new screenshot.
+    return { now, idle: !moving && count === 0 && queue.length === 0 && !window.__hvl.animated };
   }
   window.addEventListener('error', e => report(e.error || e.message));
   window.addEventListener('unhandledrejection', e => report(e.reason || 'Unhandled rejection'));
