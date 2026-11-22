@@ -63,9 +63,6 @@ namespace HtmlVideoLite
                 "--force-device-scale-factor=1", "--force-color-profile=srgb",
                 "--allow-file-access-from-files", "--disable-background-timer-throttling",
                 "--disable-renderer-backgrounding", "--disable-backgrounding-occluded-windows",
-                // Raster on the GPU instead of the CPU: full-page repaints (blur, large
-                // images) are the per-frame bottleneck on 1080p scenes.
-                "--enable-gpu-rasterization", "--ignore-gpu-blocklist",
                 "--disable-accelerated-video-decode",
                 "--disable-accelerated-video-encode", "--window-size=" + options.Width + "," + options.Height
             };
