@@ -103,8 +103,12 @@ window.__hvl.probe = function () {
 };
 
 window.__hvl.audio = function () {
-  const m = document.querySelector('audio[src],audio source[src],video[src],video source[src]');
-  return m ? (m.currentSrc || m.src) : '';
+  // Selector lists use document order, not selector priority: audio must come first.
+  const media = [...document.querySelectorAll('audio'),
+    ...document.querySelectorAll('video')];
+  return Array.from(new Set(media.map(m =>
+    m.currentSrc || m.src || (m.querySelector('source[src]') || {}).src
+  ).filter(Boolean)));
 };
 
 window.__hvl.missing = function () {

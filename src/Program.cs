@@ -13,7 +13,7 @@ namespace HtmlVideoLite
 {
     internal static class Program
     {
-        internal const string APP_VERSION = "1.0.2";
+        internal const string APP_VERSION = "1.0.3";
 
         [STAThread]
         static int Main(string[] args)

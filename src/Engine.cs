@@ -131,30 +131,73 @@ namespace HtmlVideoLite
             }) + ")");
         }
 
-        static async Task<string> Audio(Cdp page, Options o, string work, Action<Update> progress)
+        static async Task<string> CheckAudio(string path, Options o, ProcessJob job, CancellationToken token)
         {
-            if (o.Mute) return "";
-            if (!string.IsNullOrWhiteSpace(o.Audio)) return Path.GetFullPath(o.Audio);
-            string source = Convert.ToString(await page.Evaluate("window.__hvl.audio()").ConfigureAwait(false));
-            if (source.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+            var info = StartInfo(o.Ffmpeg, new[] {
+                "-hide_banner", "-loglevel", "error", "-nostdin", "-i", path,
+                "-map", "0:a:0", "-frames:a", "1", "-f", "null", "-"
+            });
+            info.RedirectStandardError = true;
+            info.StandardErrorEncoding = Encoding.UTF8;
+            using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(token))
+            using (var probe = Process.Start(info))
             {
-                int comma = source.IndexOf(',');
-                if (comma > 0 && source.Substring(0, comma).EndsWith(";base64", StringComparison.OrdinalIgnoreCase))
+                job.Add(probe);
+                timeout.CancelAfter(15000);
+                Task<string> error = probe.StandardError.ReadToEndAsync();
+                using (timeout.Token.Register(() => { try { if (!probe.HasExited) probe.Kill(); } catch (InvalidOperationException) { } }))
                 {
-                    string path = Path.Combine(work, "embedded.audio");
-                    File.WriteAllBytes(path, Convert.FromBase64String(source.Substring(comma + 1)));
-                    return path;
+                    while (!probe.HasExited) await Task.Delay(50).ConfigureAwait(false);
+                    string detail = await error.ConfigureAwait(false);
+                    token.ThrowIfCancellationRequested();
+                    if (timeout.IsCancellationRequested) throw new TimeoutException("音轨检查超过 15 秒：" + path);
+                    return probe.ExitCode == 0 ? "" : (string.IsNullOrWhiteSpace(detail) ?
+                        "FFmpeg 音轨检查失败，退出码：" + probe.ExitCode : detail.Trim());
                 }
             }
-            Uri uri;
-            if (Uri.TryCreate(source, UriKind.Absolute, out uri) && uri.IsFile)
+        }
+
+        static async Task<string> Audio(Cdp page, Options o, string work, Action<Update> progress, ProcessJob job, CancellationToken token)
+        {
+            if (o.Mute) return "";
+            bool explicitAudio = !string.IsNullOrWhiteSpace(o.Audio);
+            var sources = explicitAudio ? new[] { new Uri(Path.GetFullPath(o.Audio)).AbsoluteUri } :
+                ((System.Collections.IList)await page.Evaluate("window.__hvl.audio()").ConfigureAwait(false)).Cast<object>().Select(Convert.ToString).ToArray();
+            foreach (string source in sources)
             {
-                if (File.Exists(uri.LocalPath)) return uri.LocalPath;
-                progress(new Update(3, "警告：页面音轨文件不存在：" + uri.LocalPath + "；输出将无声。"));
-                return "";
+                token.ThrowIfCancellationRequested();
+                string path = "";
+                if (source.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+                {
+                    int comma = source.IndexOf(',');
+                    if (comma > 0 && source.Substring(0, comma).EndsWith(";base64", StringComparison.OrdinalIgnoreCase))
+                    {
+                        path = Path.Combine(work, "embedded.audio");
+                        File.WriteAllBytes(path, Convert.FromBase64String(source.Substring(comma + 1)));
+                    }
+                }
+                Uri uri;
+                if (Uri.TryCreate(source, UriKind.Absolute, out uri) && uri.IsFile) path = uri.LocalPath;
+                if (path.Length == 0)
+                {
+                    progress(new Update(3, "提示：页面音轨不是本地文件；请在音频栏指定文件：" + source.Substring(0, Math.Min(source.Length, 200))));
+                    continue;
+                }
+                if (!File.Exists(path))
+                {
+                    progress(new Update(3, "警告：页面音轨文件不存在：" + path));
+                    continue;
+                }
+                string problem = await CheckAudio(path, o, job, token).ConfigureAwait(false);
+                if (problem.Length == 0)
+                {
+                    progress(new Update(3, "使用音轨：" + path));
+                    return path;
+                }
+                if (explicitAudio) throw new IOException("指定文件没有可解码的音轨，请选择有效音频文件：" + path + "\r\n" + problem);
+                progress(new Update(3, "跳过无可用音轨的页面媒体：" + path));
             }
-            if (!string.IsNullOrEmpty(source))
-                progress(new Update(3, "提示：页面音轨不是本地文件；请在音频栏指定文件，否则输出无声。"));
+            if (sources.Length > 0) progress(new Update(3, "警告：未找到可用音轨，输出将无声；可在音频栏指定文件。"));
             return "";
         }
 
@@ -212,7 +255,7 @@ namespace HtmlVideoLite
                     var missing = (System.Collections.IList)await page.Evaluate("window.__hvl.missing()").ConfigureAwait(false);
                     foreach (object resource in missing)
                         progress(new Update(3, "素材未加载：" + resource));
-                    string audio = await Audio(page, o, work, progress).ConfigureAwait(false);
+                    string audio = await Audio(page, o, work, progress, job, token).ConfigureAwait(false);
                     if (audio.Length > 0 && string.Equals(audio, o.Output, StringComparison.OrdinalIgnoreCase))
                         throw new ArgumentException("输出文件不能覆盖页面引用的音视频资源。");
                     int frames = Math.Max(1, (int)Math.Ceiling(duration * o.Fps - 1e-9));

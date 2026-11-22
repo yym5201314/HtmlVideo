@@ -84,6 +84,33 @@ def main():
     pcm = subprocess.run([str(FFMPEG), "-v", "error", "-i", str(audio_output), "-vn", "-f", "s16le", "pipe:1"],
                          capture_output=True, timeout=30, check=True).stdout
     assert len(pcm) > 40000 and any(pcm[-4096:]), "Looped audio is missing"
+    silent_video = RESULTS / "silent-video.mp4"
+    subprocess.run([str(FFMPEG), "-v", "error", "-y", "-i", str(output),
+                    "-an", "-c:v", "copy", str(silent_video)], check=True, timeout=30)
+    priority_html = RESULTS / "audio-priority.html"
+    priority_html.write_text(
+        '<!doctype html><body data-duration="0.4">'
+        '<video autoplay muted src="' + silent_video.as_uri() + '"></video>'
+        '<audio src="' + tone.as_uri() + '"></audio></body>', encoding="utf-8")
+    priority_output, priority = convert("audio-priority", str(priority_html))
+    assert any("使用音轨：" in m and str(tone) in m for m in priority["messages"]), priority
+    priority_pcm = subprocess.run([
+        str(FFMPEG), "-v", "error", "-i", str(priority_output), "-vn",
+        "-f", "s16le", "pipe:1"], capture_output=True, check=True, timeout=30).stdout
+    assert len(priority_pcm) > 10000 and any(priority_pcm), "Priority audio is missing"
+    silent_html = RESULTS / "silent-video.html"
+    silent_html.write_text(
+        '<!doctype html><body data-duration="0.3"><video autoplay muted src="'
+        + silent_video.as_uri() + '"></video></body>', encoding="utf-8")
+    silent_output, silent = convert("silent-video-auto", str(silent_html))
+    assert any("跳过无可用音轨" in m for m in silent["messages"]), silent
+    silent_info = subprocess.run([str(FFMPEG), "-i", str(silent_output)], capture_output=True).stderr
+    assert b"Audio:" not in silent_info, silent_info
+    protected = RESULTS / "silent-video-explicit.mp4"
+    protected.write_bytes(b"preserve-explicit-audio-failure")
+    _, explicit = convert("silent-video-explicit", "animation.html", False, "--audio", str(silent_video))
+    assert "没有可解码的音轨" in explicit["error"], explicit
+    assert protected.read_bytes() == b"preserve-explicit-audio-failure"
     embedded = RESULTS / "embedded.html"
     embedded.write_text(
         '<!doctype html><meta charset="utf-8"><body data-duration="0.4">'
