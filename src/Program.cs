@@ -14,7 +14,7 @@ namespace HtmlVideoLite
 {
     internal static class Program
     {
-        internal const string APP_VERSION = "1.0.7";
+        internal const string APP_VERSION = "1.1.1";
 
         [STAThread]
         static int Main(string[] args)
@@ -46,7 +46,7 @@ namespace HtmlVideoLite
                     }
                 }
                 var allowed = new HashSet<string>(flags.Concat(new[] {
-                    "--input","--output","--duration","--width","--height","--fps","--crf",
+                    "--input","--output","--duration","--width","--height","--fps","--crf","--workers",
                     "--audio","--browser","--ffmpeg","--stage","--start","--report"
                 }));
                 foreach (string key in values.Keys)
@@ -54,7 +54,7 @@ namespace HtmlVideoLite
                 report = Get(values, "--report", "");
                 if (values.ContainsKey("--help"))
                 {
-                    updates.Add("HtmlVideoLite --input page.html [--output video.mp4] [--duration 10] [--width 1920 --height 1080 --fps 30 --crf 18] [--precise] [--audio bgm.mp3 | --mute] [--stage #stage --start #play] [--no-fit --keep-controls --overwrite] [--browser path --ffmpeg path] [--report result.json]");
+                    updates.Add("HtmlVideoLite --input page.html [--output video.mp4] [--duration 10] [--width 1920 --height 1080 --fps 30 --crf 18] [--workers 0] [--precise] [--audio bgm.mp3 | --mute] [--stage #stage --start #play] [--no-fit --keep-controls --overwrite] [--browser path --ffmpeg path] [--report result.json]");
                     SaveReport(report, true, "", updates, "");
                     return 0;
                 }
@@ -65,6 +65,7 @@ namespace HtmlVideoLite
                     Height = int.Parse(Get(values, "--height", "1080"), CultureInfo.InvariantCulture),
                     Fps = int.Parse(Get(values, "--fps", "30"), CultureInfo.InvariantCulture),
                     Crf = int.Parse(Get(values, "--crf", "18"), CultureInfo.InvariantCulture),
+                    Workers = int.Parse(Get(values, "--workers", "0"), CultureInfo.InvariantCulture),
                     Audio = Get(values, "--audio", ""), Browser = Get(values, "--browser", ""),
                     Ffmpeg = Get(values, "--ffmpeg", ""), Stage = Get(values, "--stage", ""),
                     Start = Get(values, "--start", ""), Fit = !values.ContainsKey("--no-fit"),
@@ -140,6 +141,7 @@ namespace HtmlVideoLite
         readonly TextBox browser = new TextBox(), ffmpeg = new TextBox(), stage = new TextBox(), start = new TextBox();
         readonly NumericUpDown width = Number(1920, 16, 7680), height = Number(1080, 16, 7680);
         readonly NumericUpDown fps = Number(30, 1, 120), duration = Number(0, 0, 3600), crf = Number(18, 0, 51);
+        readonly NumericUpDown workers = Number(0, 0, 8);
         readonly CheckBox fit = new CheckBox { Text = "舞台等比适配", Checked = true, AutoSize = true };
         readonly CheckBox hide = new CheckBox { Text = "隐藏舞台外控件", Checked = true, AutoSize = true };
         readonly CheckBox mute = new CheckBox { Text = "无音轨", AutoSize = true };
@@ -229,7 +231,8 @@ namespace HtmlVideoLite
             AddRow(table, "舞台选择器", stage, null);
             AddRow(table, "播放选择器", start, null);
             var toggles = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, WrapContents = false };
-            toggles.Controls.AddRange(new Control[] { fit, hide, mute, fast });
+            workers.Width = 55;
+            toggles.Controls.AddRange(new Control[] { fit, hide, mute, fast, Inline("并行进程"), workers });
             AddRow(table, "", toggles, null);
             var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
             run.Padding = new Padding(14, 2, 14, 2);
@@ -247,6 +250,7 @@ namespace HtmlVideoLite
             tips.SetToolTip(audio, "留空使用 HTML 中的本地或内嵌音轨；短音轨循环到视频结束。");
             tips.SetToolTip(crf, "数值越小质量越高、文件越大。");
             tips.SetToolTip(fast, "JPEG 95 截图 + veryfast 编码，有轻微有损压缩；关闭后使用 PNG + medium。");
+            tips.SetToolTip(workers, "并行渲染的浏览器进程数，0 = 自动（按 CPU 核数与片长决定）。进程越多越快，但更占内存。");
             tips.SetToolTip(width, "宽高必须是偶数。");
             tips.SetToolTip(input, "支持拖入 HTML 文件。");
             browser.Text = Engine.Browser(); ffmpeg.Text = Engine.Ffmpeg();
@@ -313,6 +317,7 @@ namespace HtmlVideoLite
                 Input = input.Text.Trim(), Output = output.Text.Trim(), Audio = audio.Text.Trim(),
                 Browser = browser.Text.Trim(), Ffmpeg = ffmpeg.Text.Trim(), Stage = stage.Text.Trim(), Start = start.Text.Trim(),
                 Width = (int)width.Value, Height = (int)height.Value, Fps = (int)fps.Value,
+                Workers = (int)workers.Value,
                 Duration = (double)duration.Value, Crf = (int)crf.Value, Fit = fit.Checked, Hide = hide.Checked, Mute = mute.Checked, Fast = fast.Checked
             };
             if (File.Exists(o.Output))

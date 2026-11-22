@@ -64,11 +64,25 @@ namespace HtmlVideoLite
                 "--allow-file-access-from-files", "--disable-background-timer-throttling",
                 "--disable-renderer-backgrounding", "--disable-backgrounding-occluded-windows",
                 "--disable-accelerated-video-decode",
-                "--disable-accelerated-video-encode", "--window-size=" + options.Width + "," + options.Height
+                "--disable-accelerated-video-encode", "--window-size=" + options.Width + "," + options.Height,
+                // Hundreds of CDP calls per second are throttled by Chromium's IPC
+                // flooding protection; a hidden window can also be treated as occluded.
+                "--disable-ipc-flooding-protection",
+                "--disable-features=CalculateNativeWinOcclusion",
+                // Capture waits for the next compositor frame; without the 60 Hz cap
+                // that wait shrinks (measured, virtual time keeps output deterministic).
+                "--disable-frame-rate-limit",
+                // Nothing here needs the browser's own background services.
+                "--disable-background-networking", "--disable-breakpad", "--disable-component-update",
+                "--disable-default-apps", "--disable-sync", "--no-service-autorun", "--no-pings",
+                "--disable-client-side-phishing-detection"
             };
             if (string.Equals(Path.GetFileName(options.Browser), "msedge.exe", StringComparison.OrdinalIgnoreCase))
                 args.Add("--edge-skip-compat-layer-relaunch");
             if (software) args.Add("--disable-gpu");
+            string extra = Environment.GetEnvironmentVariable("H2V_FLAGS");
+            if (!string.IsNullOrWhiteSpace(extra))
+                args.AddRange(extra.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries));
             args.Add("about:blank");
             var info = Engine.StartInfo(options.Browser, args);
             info.RedirectStandardError = info.RedirectStandardOutput = true;
@@ -143,10 +157,18 @@ namespace HtmlVideoLite
 
         public void Dispose()
         {
+            if (process != null)
+            {
+                // Kill first: a launcher that handed over to a child can otherwise sit
+                // around for seconds and stall the end of the conversion.
+                try { if (!process.HasExited) process.Kill(); }
+                catch (InvalidOperationException) { }
+                catch (System.ComponentModel.Win32Exception) { }
+            }
             job.Dispose();
             if (process != null)
             {
-                try { process.WaitForExit(5000); }
+                try { process.WaitForExit(2000); }
                 catch (InvalidOperationException) { }
                 process.Dispose();
                 process = null;

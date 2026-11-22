@@ -13,6 +13,7 @@ namespace HtmlVideoLite
     {
         internal static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
         readonly ClientWebSocket socket = new ClientWebSocket();
+        readonly byte[] buffer = new byte[65536];
         readonly CancellationToken cancel;
         int sequence;
 
@@ -53,7 +54,6 @@ namespace HtmlVideoLite
                 int id = ++sequence;
                 byte[] request = Encoding.UTF8.GetBytes(Json.Serialize(new { id = id, method = method, @params = parameters }));
                 await socket.SendAsync(new ArraySegment<byte>(request), WebSocketMessageType.Text, true, timeout.Token).ConfigureAwait(false);
-                var buffer = new byte[65536];
                 for (;;)
                 {
                     using (var stream = new MemoryStream())
@@ -76,11 +76,11 @@ namespace HtmlVideoLite
             }
         }
 
-        internal async Task<object> Evaluate(string expression)
+        internal async Task<object> Evaluate(string expression, int timeoutMs = 60000)
         {
             var result = await Call("Runtime.evaluate", new {
                 expression = expression, returnByValue = true, awaitPromise = true, userGesture = true
-            }).ConfigureAwait(false);
+            }, timeoutMs).ConfigureAwait(false);
             if (result.ContainsKey("exceptionDetails"))
             {
                 var details = (Dictionary<string, object>)result["exceptionDetails"];

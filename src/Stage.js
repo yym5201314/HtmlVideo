@@ -1,5 +1,8 @@
 window.__hvl.prepare = async function (options) {
   const clock = window.__hvl;
+  // Fast-forward granularity: one rendered frame, so a jumped page is at the
+  // same state a frame-by-frame render would have reached.
+  clock.fps = Number(options.fps) > 0 ? Number(options.fps) : 30;
   // Initialize at t=0; preparation must not consume auto-playing opening frames.
   await clock.step(0);
   // Self-updating content (canvas/video/GIF/SMIL) can repaint without any timer

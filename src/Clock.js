@@ -148,7 +148,11 @@
     }
     return moving;
   }
-  async function step(ms) {
+  // settle=false skips the compositor round trip, media=false skips native seeks.
+  // Fast-forward uses both: only page state has to advance, nothing is captured.
+  async function step(ms, settle, media) {
+    if (settle === undefined) settle = true;
+    if (media === undefined) media = true;
     syncAnimations();
     const target = now + ms;
     let count = 0;
@@ -165,29 +169,46 @@
       await Promise.resolve();
     }
     now = target;
-    await syncMedia();
+    if (media) await syncMedia();
     const queue = Array.from(rafs);
     for (const [id] of queue) rafs.delete(id);
     for (const [, fn] of queue) {
       try { fn(now); } catch (e) { report(e); }
       await Promise.resolve();
     }
-    void document.documentElement.offsetHeight;
+    if (media) {
+      void document.documentElement.offsetHeight;
+      await syncMedia();
+    }
     const moving = syncAnimations();
-    await syncMedia();
-    void document.documentElement.offsetHeight;
-    // One compositor frame is enough: Page.captureScreenshot already forces the
-    // next commit, and a second rAF doubles the wait on heavy pages.
-    await new Promise(resolve => {
-      let settled = false;
-      const done = () => { if (!settled) { settled = true; resolve(); } };
-      nativeRaf(done);
-      delay(done, 40);
-    });
+    if (media) void document.documentElement.offsetHeight;
+    if (settle) {
+      // One compositor frame is enough: Page.captureScreenshot already forces the
+      // next commit, and a second rAF doubles the wait on heavy pages.
+      await new Promise(resolve => {
+        let settled = false;
+        const done = () => { if (!settled) { settled = true; resolve(); } };
+        nativeRaf(done);
+        delay(done, 40);
+      });
+    }
     // Nothing timer-driven ran, no animation advanced and the page has no
     // self-updating media, so this picture equals the previous one and the
     // caller may reuse the last capture instead of paying for a new screenshot.
     return { now, idle: !moving && count === 0 && queue.length === 0 && !window.__hvl.animated };
+  }
+  // Replay the virtual timeline up to an absolute timestamp without capturing.
+  // Deterministic pages produce the same state as stepping frame by frame, which
+  // is what lets several browser processes render different ranges in parallel.
+  async function jump(target) {
+    const dt = 1000 / (Number(window.__hvl.fps) || 30);
+    let guard = 0;
+    while (now < target - 1e-6) {
+      if (++guard > 200000) throw Error('Virtual clock fast-forward is too long');
+      await step(Math.min(dt, target - now), false, false);
+    }
+    await step(0, true, true);
+    return now;
   }
   window.addEventListener('error', e => report(e.error || e.message));
   window.addEventListener('unhandledrejection', e => report(e.reason || 'Unhandled rejection'));
@@ -205,5 +226,5 @@
       showFrame(m, fr);
     }
   }
-  window.__hvl = { step, delay, useFrames, faults };
+  window.__hvl = { step, jump, delay, useFrames, faults, fps: 30, animated: false };
 })();
