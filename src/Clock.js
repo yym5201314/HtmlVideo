@@ -3,6 +3,7 @@
 (() => {
   const RealDate = Date, epoch = Date.now();
   const delay = window.setTimeout.bind(window);
+  const nativeRaf = window.requestAnimationFrame.bind(window);
   let now = 0, sequence = 0;
   const timers = new Map(), rafs = new Map(), animations = new WeakMap();
   const mediaState = new WeakMap();
@@ -139,9 +140,18 @@
       try { fn(now); } catch (e) { report(e); }
       await Promise.resolve();
     }
+    void document.documentElement.offsetHeight;
     syncAnimations();
     await syncMedia();
     void document.documentElement.offsetHeight;
+    // Wait a real compositor frame so transform/opacity changes are committed
+    // before the CDP screenshot, otherwise some frames flicker with stale state.
+    await new Promise(resolve => {
+      let settled = false;
+      const done = () => { if (!settled) { settled = true; resolve(); } };
+      nativeRaf(() => nativeRaf(done));
+      delay(done, 40);
+    });
     return now;
   }
   window.addEventListener('error', e => report(e.error || e.message));

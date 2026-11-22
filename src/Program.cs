@@ -163,7 +163,7 @@ namespace HtmlVideoLite
 
         internal MainForm(string initial)
         {
-            Text = "HTML 转视频 · 精简版 " + Program.APP_VERSION;
+            Text = "HTML 转视频 · Axs " + Program.APP_VERSION;
             Font = new Font("Microsoft YaHei UI", 9F);
             BackColor = Color.White;
             AutoScaleMode = AutoScaleMode.Dpi;

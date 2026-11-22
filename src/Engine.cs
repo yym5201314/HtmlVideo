@@ -207,7 +207,8 @@ namespace HtmlVideoLite
         {
             var args = new List<string> {
                 "-hide_banner", "-loglevel", "error", "-y", "-nostdin", "-i", path,
-                "-vf", "fps=" + fps.ToString(CultureInfo.InvariantCulture),
+                "-vf", "fps=" + fps.ToString(CultureInfo.InvariantCulture) +
+                       ",scale=" + o.Width + ":" + o.Height + ":force_original_aspect_ratio=increase,crop=" + o.Width + ":" + o.Height,
                 "-start_number", "0", "-q:v", "2", Path.Combine(dir, "frame_%05d.jpg")
             };
             var info = StartInfo(o.Ffmpeg, args);
