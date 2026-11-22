@@ -19,6 +19,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
       - name: Compute version
         id: ver
         shell: pwsh
@@ -27,9 +28,11 @@ jobs:
           $v = & .\scripts\ci-version.ps1 -RunNumber $env:GITHUB_RUN_NUMBER
           "version=$v" >> $env:GITHUB_OUTPUT
           "tag=v$v" >> $env:GITHUB_OUTPUT
+
       - name: Compile
         shell: pwsh
         run: python build.py --version ${{ steps.ver.outputs.version }}
+
       - name: Release
         if: >-
           (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&

@@ -170,5 +170,5 @@
       showFrame(m, fr);
     }
   }
-  window.__hvl = { step, delay, useFrames, faults, now: () => now };
+  window.__hvl = { step, delay, useFrames, faults };
 })();
