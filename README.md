@@ -21,7 +21,7 @@
 
 本地 FFmpeg 是从旧项目复用的 2018 年构建，只用于保留既有编码环境与本地验证，不代表推荐的新版本。也可以在界面选择自己的 FFmpeg；需支持 `libx264`、AAC、MJPEG 和 PNG 解码。程序不自动联网下载或安装依赖。
 
-Windows 10/11、.NET Framework 4.8 和 Edge/Chrome 为目标环境；最终测试环境见 `VERIFICATION.md`。分发时保留如下结构，或自行选择现有 FFmpeg：
+Windows 10/11、.NET Framework 4.8 和 Edge/Chrome 为目标环境。分发时保留如下结构，或自行选择现有 FFmpeg：
 
 ```text
 HtmlVideoLite.exe
@@ -57,7 +57,9 @@ FFmpeg 搜索顺序：`H2V_FFMPEG`、EXE 同目录、EXE 旁 `tools/`、EXE 上�
 
 ### 1.0.4 视频抽帧渲染与默认参数
 
-含 `<video>` 的页面不再让浏览器实时解码、逐帧 seek（无头模式下反复寻帧会让 GPU / 解码器卡死、截图超时），而是先用 FFmpeg 把本地视频按目标帧率抽成 JPEG 帧序列，再把这些帧作为元素背景图按虚拟时钟逐帧显示。抽帧失败时回退到原逐帧寻帧，并在启动参数中禁用硬件视频解码以降低卡死概率。默认分辨率由 1920×1080 调整为 1280×720、默认帧率由 30 调整为 24；界面与命令行默认值同步修改。
+含 `<video>` 的页面不再让浏览器实时解码、逐帧 seek（无头模式下反复寻帧会让 GPU / 解码器卡死、截图超时），而是先用 FFmpeg 把本地视频按目标帧率抽成 JPEG 帧序列，再把这些帧作为元素背景图按虚拟时钟逐帧显示。抽帧失败时回退到原逐帧寻帧，并在启动参数中禁用硬件视频解码以降低卡死概率。默认分辨率 1920×1080、默认帧率 30；界面与命令行默认值同步。
+
+浏览器与 FFmpeg 路径会自动检测（搜索顺序见上）；手动选择过一次后写入 `%LOCALAPPDATA%\HtmlVideoLite\settings.txt`，下次启动自动回填，无需重复选择。
 
 ## 使用边界
 
@@ -97,19 +99,17 @@ $p.ExitCode
 
 固定帧率的时长取 `ceil(时长 × 帧率) / 帧率`，最多向上补不足一帧。
 
-## 构建与测试
+## 构建
 
 构建时使用 Python 标准库调用 Windows 自带 `csc.exe`，不需 pip、npm 或 SDK；Python 不参与最终程序运行。
 
 ```powershell
 python build.py
-python tests/smoke.py
-python tests/harness.py
 ```
 
-`build.py --version 1.0.23` 可覆盖构建版本，不修改源码或 VERSION。构建超过 300 KB 直接失败。验证数据和截图放 `build/smoke/`，不会编入 EXE。
+`build.py --version 1.0.23` 可覆盖构建版本，不修改源码或 VERSION。构建超过 300 KB 直接失败。
 
-GitHub Actions 已配置 main/master 推送、PR 和手动构建，版本号为 `MAJOR.MINOR.RUN_NUMBER`，发布前检查远端同名 tag。构建产物仅上传至 Releases，不上传 Actions Artifacts；PR 只编译、不发布。Release 仅包含 ASCII 命名 EXE，不上传 FFmpeg 或浏览器。仓库只跟踪源码、构建脚本、工作流、说明文档和测试夹具；EXE 与测试生成数据由本地构建或 CI 生成。提交和推送由用户手动操作，不由助手主动执行。
+GitHub Actions 已配置 main/master 推送、PR 和手动构建，版本号为 `MAJOR.MINOR.RUN_NUMBER`，发布前检查远端同名 tag。构建产物仅上传至 Releases，不上传 Actions Artifacts；PR 只编译、不发布。Release 仅包含 ASCII 命名 EXE，不上传 FFmpeg 或浏览器。仓库只跟踪源码、构建脚本、工作流和说明文档；EXE 与本地产物由本地构建或 CI 生成。提交和推送由用户手动操作，不由助手主动执行。
 
 ## 第三方编码器
 

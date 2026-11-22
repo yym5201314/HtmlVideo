@@ -8,12 +8,13 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using System.Runtime.InteropServices;
 
 namespace HtmlVideoLite
 {
     internal static class Program
     {
-        internal const string APP_VERSION = "1.0.4";
+        internal const string APP_VERSION = "1.0.7";
 
         [STAThread]
         static int Main(string[] args)
@@ -53,16 +54,16 @@ namespace HtmlVideoLite
                 report = Get(values, "--report", "");
                 if (values.ContainsKey("--help"))
                 {
-                    updates.Add("HtmlVideoLite --input page.html [--output video.mp4] [--duration 10] [--width 1280 --height 720 --fps 24 --crf 18] [--precise] [--audio bgm.mp3 | --mute] [--stage #stage --start #play] [--no-fit --keep-controls --overwrite] [--browser path --ffmpeg path] [--report result.json]");
+                    updates.Add("HtmlVideoLite --input page.html [--output video.mp4] [--duration 10] [--width 1920 --height 1080 --fps 30 --crf 18] [--precise] [--audio bgm.mp3 | --mute] [--stage #stage --start #play] [--no-fit --keep-controls --overwrite] [--browser path --ffmpeg path] [--report result.json]");
                     SaveReport(report, true, "", updates, "");
                     return 0;
                 }
                 var o = new Options {
                     Input = Get(values, "--input", ""), Output = Get(values, "--output", ""),
                     Duration = double.Parse(Get(values, "--duration", "0"), CultureInfo.InvariantCulture),
-                    Width = int.Parse(Get(values, "--width", "1280"), CultureInfo.InvariantCulture),
-                    Height = int.Parse(Get(values, "--height", "720"), CultureInfo.InvariantCulture),
-                    Fps = int.Parse(Get(values, "--fps", "24"), CultureInfo.InvariantCulture),
+                    Width = int.Parse(Get(values, "--width", "1920"), CultureInfo.InvariantCulture),
+                    Height = int.Parse(Get(values, "--height", "1080"), CultureInfo.InvariantCulture),
+                    Fps = int.Parse(Get(values, "--fps", "30"), CultureInfo.InvariantCulture),
                     Crf = int.Parse(Get(values, "--crf", "18"), CultureInfo.InvariantCulture),
                     Audio = Get(values, "--audio", ""), Browser = Get(values, "--browser", ""),
                     Ffmpeg = Get(values, "--ffmpeg", ""), Stage = Get(values, "--stage", ""),
@@ -96,14 +97,49 @@ namespace HtmlVideoLite
                 File.WriteAllText(path, Cdp.Json.Serialize(new { success = success, output = output, messages = updates, error = error }), new System.Text.UTF8Encoding(false));
             else Console.WriteLine(success ? string.Join(Environment.NewLine, updates) : error);
         }
+
+        // Remember the browser / FFmpeg paths the user picked, so they are not asked again.
+        static string SettingsFile()
+        {
+            return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "HtmlVideoLite", "settings.txt");
+        }
+
+        internal static string LoadSetting(string key)
+        {
+            try
+            {
+                if (!File.Exists(SettingsFile())) return "";
+                foreach (string line in File.ReadAllLines(SettingsFile()))
+                {
+                    int eq = line.IndexOf('=');
+                    if (eq > 0 && line.Substring(0, eq).Trim() == key) return line.Substring(eq + 1).Trim();
+                }
+            }
+            catch { }
+            return "";
+        }
+
+        internal static void SaveSetting(string key, string value)
+        {
+            try
+            {
+                var lines = new List<string>();
+                if (File.Exists(SettingsFile())) lines.AddRange(File.ReadAllLines(SettingsFile()));
+                lines.RemoveAll(l => l.StartsWith(key + "=", StringComparison.Ordinal));
+                lines.Add(key + "=" + value);
+                Directory.CreateDirectory(Path.GetDirectoryName(SettingsFile()));
+                File.WriteAllLines(SettingsFile(), lines, new System.Text.UTF8Encoding(false));
+            }
+            catch { }
+        }
     }
 
     internal sealed class MainForm : Form
     {
         readonly TextBox input = new TextBox(), output = new TextBox(), audio = new TextBox();
         readonly TextBox browser = new TextBox(), ffmpeg = new TextBox(), stage = new TextBox(), start = new TextBox();
-        readonly NumericUpDown width = Number(1280, 16, 7680), height = Number(720, 16, 7680);
-        readonly NumericUpDown fps = Number(24, 1, 120), duration = Number(0, 0, 3600), crf = Number(18, 0, 51);
+        readonly NumericUpDown width = Number(1920, 16, 7680), height = Number(1080, 16, 7680);
+        readonly NumericUpDown fps = Number(30, 1, 120), duration = Number(0, 0, 3600), crf = Number(18, 0, 51);
         readonly CheckBox fit = new CheckBox { Text = "舞台等比适配", Checked = true, AutoSize = true };
         readonly CheckBox hide = new CheckBox { Text = "隐藏舞台外控件", Checked = true, AutoSize = true };
         readonly CheckBox mute = new CheckBox { Text = "无音轨", AutoSize = true };
@@ -120,6 +156,10 @@ namespace HtmlVideoLite
         CancellationTokenSource cancellation;
         string lastOutput;
         bool closeRequested;
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, string lParam);
+        const int EM_SETCUEBANNER = 0x1501;
+        static void SetCue(TextBox box, string cue) { SendMessage(box.Handle, EM_SETCUEBANNER, (IntPtr)1, cue); }
 
         internal MainForm(string initial)
         {
@@ -160,16 +200,16 @@ namespace HtmlVideoLite
             });
             AddPath(table, "浏览器", browser, () => {
                 string file = Pick("浏览器程序|msedge.exe;chrome.exe|EXE|*.exe");
-                if (file != null) browser.Text = file;
+                if (file != null) { browser.Text = file; Program.SaveSetting("browser", file); }
             });
             AddPath(table, "FFmpeg", ffmpeg, () => {
                 string file = Pick("FFmpeg|ffmpeg.exe|EXE|*.exe");
-                if (file != null) ffmpeg.Text = file;
+                if (file != null) { ffmpeg.Text = file; Program.SaveSetting("ffmpeg", file); }
             });
             var sizeRow = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, WrapContents = false };
             var presets = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 170 };
             presets.Items.AddRange(new object[] { "1920 x 1080", "1280 x 720", "2560 x 1440", "1080 x 1920", "720 x 1280", "自定义" });
-            presets.SelectedIndex = 1;
+            presets.SelectedIndex = 0;
             bool selectingPreset = false;
             presets.SelectedIndexChanged += (s, e) => {
                 if (presets.SelectedIndex == 5) return;
@@ -184,7 +224,7 @@ namespace HtmlVideoLite
             AddRow(table, "分辨率", sizeRow, null);
             var timing = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, WrapContents = false };
             duration.DecimalPlaces = 2; duration.Increment = 0.1M;
-            timing.Controls.AddRange(new Control[] { fps, Inline("fps"), duration, Inline("秒（0 = 自动）"), crf, Inline("CRF") });
+            timing.Controls.AddRange(new Control[] { fps, Inline("fps"), duration, Inline("秒（0 = 自动）"), crf, Inline("CRF数值越小 → 画质越高") });
             AddRow(table, "视频参数", timing, null);
             AddRow(table, "舞台选择器", stage, null);
             AddRow(table, "播放选择器", start, null);
@@ -200,6 +240,8 @@ namespace HtmlVideoLite
             root.Controls.Add(status, 0, 4);
             root.Controls.Add(log, 0, 5);
             Controls.Add(root);
+            SetCue(stage, "CSS 选择器，例如画面没对准主体、裁错区域→ 打开.html 源码，找到主画面容器的 id 或 class，填进去");
+            SetCue(start, "CSS 选择器，例如视频前几帧是静止的黑屏/未播放状态→ 找到按钮的 id/class 填进去");
             tips.SetToolTip(stage, "CSS 选择器，例如 #stage；留空自动识别。");
             tips.SetToolTip(start, "CSS 选择器，例如 #startBtn；留空识别播放按钮。");
             tips.SetToolTip(audio, "留空使用 HTML 中的本地或内嵌音轨；短音轨循环到视频结束。");
@@ -208,6 +250,8 @@ namespace HtmlVideoLite
             tips.SetToolTip(width, "宽高必须是偶数。");
             tips.SetToolTip(input, "支持拖入 HTML 文件。");
             browser.Text = Engine.Browser(); ffmpeg.Text = Engine.Ffmpeg();
+            if (browser.Text.Length == 0) browser.Text = Program.LoadSetting("browser");
+            if (ffmpeg.Text.Length == 0) ffmpeg.Text = Program.LoadSetting("ffmpeg");
             AllowDrop = true;
             DragEnter += (s, e) => { if (cancellation == null && e.Data.GetDataPresent(DataFormats.FileDrop)) e.Effect = DragDropEffects.Copy; };
             DragDrop += (s, e) => {
