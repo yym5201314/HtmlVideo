@@ -52,21 +52,73 @@ window.__hvl.prepare = async function (options) {
       '.frame:not(.on) .fx,.frame:not(.on) .fx *{display:none !important}';
     (document.head || document.documentElement).appendChild(layerStyle);
   }
-  let playback = '自动播放 / 静态页面';
+  let playback = '自动播放 / 静态页面', clicked = false;
+  const visible = el => { const r = el.getBoundingClientRect(), s = getComputedStyle(el);
+    return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden' && !el.disabled; };
+  const area = el => { const r = el.getBoundingClientRect(); return r.width * r.height; };
+  const meta = el => (el.id || '') + ' ' + (typeof el.className === 'string' ? el.className : '') + ' ' +
+    (el.getAttribute('aria-label') || '') + ' ' + (el.getAttribute('title') || '');
+  const press = /播放|开始|开场|放映|play|start/i, again = /重播|重新|replay|restart/i;
+  // Pass 1: a real control. Wording on the control itself is the strongest signal:
+  // a page can carry "play" in an id while the label means pause (#playBtn = 暂停
+  // next to the real #startBtn 开始放映), and pressing that one leaves the cover up.
+  // Among equally labelled controls the smallest box wins, so a play button nested
+  // in a full-screen cover is pressed instead of the cover wrapper.
+  function control() {
+    const scored = [];
+    for (const el of document.querySelectorAll(
+      'button,[role="button"],a,input[type="button"],input[type="submit"],' +
+      '#startBtn,#btnStart,#bigplay,[data-play],[data-start],[data-begin],' +
+      '.play-btn,.start-btn,.btn,.button,[class*="play"],[class*="start"]')) {
+      if (!visible(el)) continue;
+      const text = (el.textContent || '').trim(), attr = meta(el);
+      let rank;
+      if (press.test(text)) rank = 0;
+      else if (again.test(text)) rank = 1;
+      else if (press.test(attr) || again.test(attr)) rank = 2;
+      else continue;
+      scored.push({ el: el, rank: rank, area: area(el) });
+    }
+    scored.sort((a, b) => a.rank - b.rank || a.area - b.area);
+    return scored.length ? scored[0].el : null;
+  }
+  // Pass 2 (no control found): plenty of pages only make "click the cover" start
+  // playback. Press the innermost wrapper at the middle of the picture that looks
+  // like a cover / intro layer, or a large pointer-cursor surface. Anything else -
+  // a plain article body, a link, a caption - is left alone, so a genuinely static
+  // page is not clicked at all.
+  function overlay() {
+    const hints = /cover|intro|splash|enter|start|play|poster|hero|opening|landing/i;
+    let el = document.elementFromPoint(innerWidth / 2, innerHeight / 2);
+    for (let up = 0; el && el !== document.body && up < 12; up++, el = el.parentElement) {
+      if (!visible(el)) continue;
+      // A page root (#stage/#app directly under <body>) is not a cover: pressing it
+      // is just a random click on the picture, so leave static pages alone.
+      if (!el.parentElement || el.parentElement === document.body ||
+        el.parentElement === document.documentElement) continue;
+      if (hints.test(meta(el))) return el;
+      if (area(el) >= innerWidth * innerHeight * 0.4 && getComputedStyle(el).cursor === 'pointer') return el;
+    }
+    return null;
+  }
   let button = options.start ? document.querySelector(options.start) : null;
   if (options.start && !button) throw Error('Start selector did not match: ' + options.start);
+  let guessed = false;
   if (!options.start) {
-    const visible = el => { const r = el.getBoundingClientRect(), s = getComputedStyle(el);
-      return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden' && !el.disabled; };
-    button = Array.from(document.querySelectorAll(
-      'button,[role="button"],#startBtn,#btnStart,#bigplay,[data-play],.play-btn,.start-btn'
-    )).find(el => visible(el) && /播放|开始|重播|play|start|replay/i.test(
-      (el.id || '')+' '+el.className+' '+(el.textContent || '')+' '+(el.getAttribute('aria-label') || '')));
+    button = control();
+    if (!button) { button = overlay(); guessed = button != null; }
   }
   if (button) {
     button.click(); // Exactly once; do not synthesize a second click.
-    playback = '点击：' + (options.start || button.id || button.textContent.trim().slice(0,30));
+    clicked = true;
+    const text = (button.textContent || '').trim().slice(0,30);
+    const cls = typeof button.className === 'string' ? button.className.trim() : '';
+    // Name a guessed cover by its id/class; name a real control by its label.
+    const tag = options.start || (guessed ? (button.id || cls) : (button.id || text)) || '画面中心';
+    playback = '点击：' + tag.trim().slice(0,30) + (guessed ? '（未识别到播放按钮）' : '');
     await Promise.resolve();
+  } else if (!options.start) {
+    playback = '未点击（未识别到播放入口）';
   }
   if (options.hide && stage && stage !== document.body) {
     let child = stage;
@@ -79,7 +131,7 @@ window.__hvl.prepare = async function (options) {
   }
   const missing = Array.from(document.images).filter(im => !im.naturalWidth).length;
   await clock.step(0);
-  return {stage: selector || '完整视口', playback, missing};
+  return {stage: selector || '完整视口', playback, clicked, missing};
 };
 
 window.__hvl.probe = function () {

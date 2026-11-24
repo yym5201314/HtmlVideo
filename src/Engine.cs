@@ -82,6 +82,10 @@ namespace HtmlVideoLite
             };
         }
 
+        // JPEG quality for the fast mode: high enough that the H.264 pass leaves it
+        // invisible, low enough that the browser's encoder keeps up.
+        internal const int JpegQuality = 95;
+
         internal static void Validate(Options o)
         {
             o.Input = Path.GetFullPath(o.Input);
@@ -104,12 +108,6 @@ namespace HtmlVideoLite
                 throw new ArgumentException("时长应为 0（自动）或 0.2–3600 秒。");
             if (!string.IsNullOrWhiteSpace(o.Audio) && !File.Exists(o.Audio))
                 throw new ArgumentException("找不到音频文件：" + o.Audio);
-            if (o.Workers == 0)
-            {
-                int env;
-                if (int.TryParse(Environment.GetEnvironmentVariable("H2V_WORKERS"), out env) && env > 0)
-                    o.Workers = Math.Min(env, 16);
-            }
             if (o.Workers < 0 || o.Workers > 16)
                 throw new ArgumentException("并行进程数应为 0（自动）或 1–16。");
             if (string.IsNullOrWhiteSpace(o.Browser)) o.Browser = Browser();
@@ -382,6 +380,12 @@ namespace HtmlVideoLite
                 await Task.WhenAll(workers.Select(w => w.Prepare())).ConfigureAwait(false);
                 var preparation = workers[0].Preparation;
                 progress(new Update(3, "舞台：" + preparation["stage"] + "；" + preparation["playback"]));
+                // A page whose play entry cannot be found never starts, and the only
+                // symptom would be a 60-second still of the cover. Say so up front,
+                // while the user can still cancel and fill in the selector.
+                bool started = preparation.ContainsKey("clicked") && Convert.ToBoolean(preparation["clicked"]);
+                if (!started && string.IsNullOrWhiteSpace(o.Start))
+                    progress(new Update(3, "未识别到播放入口（未点击）。若页面需要点击才开始，请填写“播放选择器”（CSS，例如 #startBtn，也可先点页面看按钮的 id）；静态 HTML 可忽略。"));
                 if (Convert.ToInt32(preparation["missing"]) > 0)
                     progress(new Update(3, "警告：存在未加载的图片，请检查资源路径或网络。"));
                 var missing = (IList)await workers[0].Page.Evaluate("window.__hvl.missing()").ConfigureAwait(false);
@@ -431,7 +435,10 @@ namespace HtmlVideoLite
                 faults = faults.Distinct().ToList();
                 if (faults.Count > 0) progress(new Update(97, "页面脚本警告：" + string.Join("\r\n", faults)));
                 int changed = workers.Sum(w => w.Changed);
-                if (changed == 0 && frames > 1) progress(new Update(97, "警告：画面完全静止，请检查播放入口；静态 HTML 可忽略。"));
+                if (changed == 0 && frames > 1)
+                    progress(new Update(97, started
+                        ? "警告：画面完全静止，请检查播放入口；静态 HTML 可忽略。"
+                        : "警告：画面完全静止，且没有点到播放入口。请在“播放选择器”填写开始按钮的 CSS（例如 #startBtn），或用 --start 指定后重试；静态 HTML 可忽略。"));
 
                 var segments = workers.Where(w => w.LastFrame > w.FirstFrame).Select(w => w.Segment).ToList();
                 progress(new Update(96, segments.Count > 1 ? "合并 " + segments.Count + " 个分片并封装 MP4…" : "封装 MP4…"));
@@ -529,8 +536,8 @@ namespace HtmlVideoLite
 
             internal void Note(string message)
             {
-                int n = Interlocked.CompareExchange(ref done, 0, 0);
-                Report(Math.Min(95, 3 + n * 92 / Math.Max(1, total)), message);
+                // Diagnostics must survive the command line's progress filter.
+                Report(3, message);
             }
 
             internal void Report(int percent, string message) { report(new Update(percent, message)); }
@@ -547,8 +554,12 @@ namespace HtmlVideoLite
             readonly int index;
             BrowserProcess browser;
             Cdp page, shots;
+            Screencast cast;
+            string endpoint;
+            bool streamMode;
+            int misses, rebuilds;
             internal int FirstFrame, LastFrame, Changed;
-            internal long ReplayMs, StepMs, CaptureMs, LaunchMs, LoadMs;
+            internal long ReplayMs, StepMs, CaptureMs, StreamMs, LaunchMs, LoadMs, Streamed, Stale;
             internal string Segment, FrameMapJson = "";
             internal Dictionary<string, object> Preparation;
 
@@ -579,7 +590,7 @@ namespace HtmlVideoLite
                     targetId = Convert.ToString(target["targetId"]);
                 }
                 var uri = new Uri(browser.Endpoint);
-                string endpoint = "ws://127.0.0.1:" + uri.Port + "/devtools/page/" + targetId;
+                endpoint = "ws://127.0.0.1:" + uri.Port + "/devtools/page/" + targetId;
                 page = new Cdp(token);
                 await page.Connect(endpoint).ConfigureAwait(false);
                 await page.Call("Page.enable", new { }).ConfigureAwait(false);
@@ -594,6 +605,44 @@ namespace HtmlVideoLite
                 // takes the page-control socket down with it.
                 shots = new Cdp(token);
                 await shots.Connect(endpoint).ConfigureAwait(false);
+            }
+
+            // Started only when a requested capture stalls: pushing frames costs the
+            // browser a JPEG encode per presented frame, so normal pages must not pay
+            // for it. Once started, the stream carries the rest of the segment.
+            async Task<bool> StartStream()
+            {
+                if (cast != null) return true;
+                try
+                {
+                    cast = new Screencast(token);
+                    await cast.Start(endpoint, options.Width, options.Height, JpegQuality).ConfigureAwait(false);
+                    return true;
+                }
+                catch (Exception e)
+                {
+                    if (e is OperationCanceledException) throw;
+                    if (cast != null) { cast.Dispose(); cast = null; }
+                    return false;
+                }
+            }
+
+            void StopStream()
+            {
+                if (cast != null) { cast.Dispose(); cast = null; }
+            }
+
+            async Task<byte[]> StreamFrame(int timeoutMs)
+            {
+                if (cast == null) return null;
+                cast.Drain();
+                // Only a real compositor frame proves the current DOM has been drawn.
+                await page.Evaluate("window.__hvl.settle(2)").ConfigureAwait(false);
+                var watch = Stopwatch.StartNew();
+                byte[] frame = await cast.Next(timeoutMs).ConfigureAwait(false);
+                StreamMs += watch.ElapsedMilliseconds;
+                if (frame != null) Streamed++;
+                return frame;
             }
 
             internal async Task Load()
@@ -638,6 +687,8 @@ namespace HtmlVideoLite
             // page and replay the virtual timeline to the frame we were on.
             async Task Replay(int frame)
             {
+                StopStream();
+                streamMode = false;
                 if (shots != null) { shots.Dispose(); shots = null; }
                 if (page != null) { page.Dispose(); page = null; }
                 await Open().ConfigureAwait(false);
@@ -649,18 +700,58 @@ namespace HtmlVideoLite
 
             async Task<bool> StepOnce()
             {
-                // settle=false: Page.captureScreenshot forces the commit itself, so
-                // waiting for a browser animation frame here just adds ~16 ms.
+                // Never waits for a compositor frame: Page.captureScreenshot forces
+                // its own commit, and the pushed-frame path settles only when it is
+                // actually about to read a frame. Otherwise a page that changes
+                // nothing would pay a vsync per frame for no reason.
                 object state = await page.Evaluate("window.__hvl.step(" +
-                    (1000.0 / options.Fps).ToString("R", CultureInfo.InvariantCulture) + ", false)").ConfigureAwait(false);
+                    (1000.0 / options.Fps).ToString("R", CultureInfo.InvariantCulture) + ", 0)").ConfigureAwait(false);
                 var clock = state as Dictionary<string, object>;
                 return clock != null && clock.ContainsKey("idle") && Convert.ToBoolean(clock["idle"]);
             }
 
-            static int JpegQuality()
+
+
+            // Requested frame: Page.captureScreenshot forces the compositor to draw,
+            // so a heavy page can stall it. That is what the pushed stream is for.
+            async Task<byte[]> CaptureFrame(int frame, Dictionary<string, object> captureOptions, ProgressGate gate)
             {
-                int q;
-                return int.TryParse(Environment.GetEnvironmentVariable("H2V_JPEG_Q"), out q) && q >= 50 && q <= 100 ? q : 95;
+                for (int struck = 0; ; struck++)
+                {
+                    // The 96a0c29 flicker fix: transforms and opacity changes only
+                    // reach the compositor surface after a real frame, so grabbing it
+                    // without this wait sometimes returns the previous picture.
+                    await page.Evaluate("window.__hvl.settle(2)").ConfigureAwait(false);
+                    Dictionary<string, object> capture = null;
+                    Exception stall = null;
+                    var watch = Stopwatch.StartNew();
+                    try { capture = await shots.Call("Page.captureScreenshot", captureOptions, 4000).ConfigureAwait(false); }
+                    catch (TimeoutException e) { stall = e; }
+                    CaptureMs += watch.ElapsedMilliseconds;
+                    if (stall == null) return Convert.FromBase64String((string)capture["data"]);
+                    token.ThrowIfCancellationRequested();
+                    // First stall: let the compositor push frames instead of asking for
+                    // them, which is what keeps an Electron offscreen renderer alive.
+                    if (!streamMode && await StartStream().ConfigureAwait(false))
+                    {
+                        streamMode = true;
+                        misses = 0;
+                        gate.Note("第 " + (frame + 1) + " 帧截图超过 4 秒，改用合成器推送的帧继续渲染。");
+                        byte[] pushed = await StreamFrame(6000).ConfigureAwait(false);
+                        if (pushed != null) return pushed;
+                        gate.Note("推送帧同样没有响应，重建页面并重放…");
+                        await Replay(frame).ConfigureAwait(false);
+                        continue;
+                    }
+                    if (rebuilds >= 2) throw new TimeoutException("第 " + (frame + 1) +
+                        " 帧截图与推送帧都没有响应，渲染无法继续。请尝试降低分辨率或帧率，或关闭“快速模式”。");
+                    // Rebuild, replay to this frame, then capture again; nothing is skipped.
+                    rebuilds++;
+                    gate.Note("第 " + (frame + 1) + " 帧截图超时，重建页面并重放…");
+                    await Replay(frame).ConfigureAwait(false);
+                    // A rebuilt surface sometimes only answers a region capture.
+                    captureOptions["clip"] = new { x = 0, y = 0, width = options.Width, height = options.Height, scale = 1 };
+                }
             }
 
             internal async Task Render(ProgressGate gate, Action<Update> progress)
@@ -681,16 +772,16 @@ namespace HtmlVideoLite
                 {
                     encoders.Add(encoder);
                     Task<string> error = encoder.StandardError.ReadToEndAsync();
-                    await Loop(encoder, gate, progress).ConfigureAwait(false);
+                    await Loop(encoder, gate).ConfigureAwait(false);
                     encoder.StandardInput.Close();
                     while (!encoder.HasExited) await Task.Delay(60, token).ConfigureAwait(false);
                     string detail = await error.ConfigureAwait(false);
                     token.ThrowIfCancellationRequested();
                     if (encoder.ExitCode != 0) throw new IOException("FFmpeg 编码失败：" + detail);
                     if (Environment.GetEnvironmentVariable("H2V_TIMING") != null)
-                        progress(new Update(3, "计时 分片" + index + "：" + (LastFrame - FirstFrame) + " 帧，截图 " +
-                            CaptureMs + "ms，时钟 " + StepMs + "ms，快进 " + ReplayMs + "ms，启动 " + LaunchMs +
-                            "ms，加载 " + LoadMs + "ms"));
+                        progress(new Update(3, "计时 分片" + index + "：" + (LastFrame - FirstFrame) + " 帧（推送 " +
+                            Streamed + "，滞后重取 " + Stale + "），截图 " + CaptureMs + "ms，等待推送 " + StreamMs +
+                            "ms，时钟 " + StepMs + "ms，快进 " + ReplayMs + "ms，启动 " + LaunchMs + "ms，加载 " + LoadMs + "ms"));
                 }
                 finally
                 {
@@ -699,7 +790,7 @@ namespace HtmlVideoLite
                 }
             }
 
-            async Task Loop(Process encoder, ProgressGate gate, Action<Update> progress)
+            async Task Loop(Process encoder, ProgressGate gate)
             {
                 byte[] previous = null, first = null;
                 var captureOptions = new Dictionary<string, object> {
@@ -708,7 +799,7 @@ namespace HtmlVideoLite
                     // slowest path on heavy pages; the clip below already pins the viewport.
                     { "captureBeyondViewport", false }, { "optimizeForSpeed", options.Fast }
                 };
-                if (options.Fast) captureOptions["quality"] = JpegQuality();
+                if (options.Fast) captureOptions["quality"] = JpegQuality;
                 for (int i = FirstFrame; i < LastFrame; i++)
                 {
                     token.ThrowIfCancellationRequested();
@@ -728,27 +819,38 @@ namespace HtmlVideoLite
                         idle = false;
                     }
                     bool reuse = idle && previous != null;
-                    Dictionary<string, object> capture = null;
-                    int struck = 0;
-                    while (capture == null && !reuse)
+                    byte[] frame;
+                    if (reuse) frame = previous;
+                    else
                     {
-                        Exception stall = null;
-                        var captureWatch = Stopwatch.StartNew();
-                        try { capture = await shots.Call("Page.captureScreenshot", captureOptions, 15000).ConfigureAwait(false); }
-                        catch (TimeoutException e) { stall = e; }
-                        CaptureMs += captureWatch.ElapsedMilliseconds;
-                        if (stall == null) break;
-                        token.ThrowIfCancellationRequested();
-                        if (++struck > 2) throw new TimeoutException("第 " + (i + 1) + " 帧截图连续 " + struck +
-                            " 次超时。请尝试降低分辨率或帧率，或关闭“快速模式”重试。");
-                        // Rebuild, replay to this frame, then capture again; nothing is skipped.
-                        gate.Note("第 " + (i + 1) + " 帧截图超时（第 " + struck + " 次），重建页面并重放…");
-                        await Replay(i).ConfigureAwait(false);
-                        // A rebuilt surface sometimes only answers a region capture.
-                        captureOptions["clip"] = new { x = 0, y = 0, width = options.Width, height = options.Height, scale = 1 };
-                        if (options.Fast && struck > 1) captureOptions["quality"] = 70;
+                        frame = null;
+                        if (streamMode)
+                        {
+                            // The first pushed frame after a jump pays for rasterising
+                            // the new state; later ones arrive in tens of milliseconds.
+                            frame = await StreamFrame(Streamed == 0 ? 6000 : 2000).ConfigureAwait(false);
+                            if (frame != null)
+                            {
+                                misses = 0;
+                                // The compositor can still be one presentation behind,
+                                // which shows up as the previous picture pushed again.
+                                // Ask for an explicit frame instead of baking in a repeat.
+                                if (previous != null && frame.SequenceEqual(previous))
+                                {
+                                    frame = null;
+                                    Stale++;
+                                }
+                            }
+                            else if (++misses >= 3)
+                            {
+                                // Nothing is being pushed (static picture or dead stream).
+                                StopStream();
+                                streamMode = false;
+                                gate.Note("推送帧连续无响应，恢复请求式截图。");
+                            }
+                        }
+                        if (frame == null) frame = await CaptureFrame(i, captureOptions, gate).ConfigureAwait(false);
                     }
-                    byte[] frame = reuse ? previous : Convert.FromBase64String((string)capture["data"]);
                     if (!reuse) previous = frame;
                     if (first == null) first = frame;
                     else if (!first.SequenceEqual(frame)) Changed++;
@@ -764,6 +866,7 @@ namespace HtmlVideoLite
 
             public void Dispose()
             {
+                if (cast != null) { cast.Dispose(); cast = null; }
                 if (shots != null) { shots.Dispose(); shots = null; }
                 if (page != null) { page.Dispose(); page = null; }
                 if (browser != null) { browser.Dispose(); browser = null; }

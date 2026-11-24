@@ -14,7 +14,7 @@ namespace HtmlVideoLite
 {
     internal static class Program
     {
-        internal const string APP_VERSION = "1.1.1";
+        internal const string APP_VERSION = "1.1.3";
 
         [STAThread]
         static int Main(string[] args)
@@ -244,9 +244,9 @@ namespace HtmlVideoLite
             root.Controls.Add(log, 0, 5);
             Controls.Add(root);
             SetCue(stage, "CSS 选择器，例如画面没对准主体、裁错区域→ 打开.html 源码，找到主画面容器的 id 或 class，填进去");
-            SetCue(start, "CSS 选择器，例如视频前几帧是静止的黑屏/未播放状态→ 找到按钮的 id/class 填进去");
+            SetCue(start, "CSS 选择器，例如按钮文字是“开始播放”→ 填按钮容器的 id 或 class，如 #startBtn；留空自动识别");
             tips.SetToolTip(stage, "CSS 选择器，例如 #stage；留空自动识别。");
-            tips.SetToolTip(start, "CSS 选择器，例如 #startBtn；留空识别播放按钮。");
+            tips.SetToolTip(start, "留空自动识别播放按钮；如果日志提示“未识别到播放入口”或成片只有封面，就填按钮的 id/class，例如 #startBtn。");
             tips.SetToolTip(audio, "留空使用 HTML 中的本地或内嵌音轨；短音轨循环到视频结束。");
             tips.SetToolTip(crf, "数值越小质量越高、文件越大。");
             tips.SetToolTip(fast, "JPEG 95 截图 + veryfast 编码，有轻微有损压缩；关闭后使用 PNG + medium。");

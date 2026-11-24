@@ -80,9 +80,6 @@ namespace HtmlVideoLite
             if (string.Equals(Path.GetFileName(options.Browser), "msedge.exe", StringComparison.OrdinalIgnoreCase))
                 args.Add("--edge-skip-compat-layer-relaunch");
             if (software) args.Add("--disable-gpu");
-            string extra = Environment.GetEnvironmentVariable("H2V_FLAGS");
-            if (!string.IsNullOrWhiteSpace(extra))
-                args.AddRange(extra.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries));
             args.Add("about:blank");
             var info = Engine.StartInfo(options.Browser, args);
             info.RedirectStandardError = info.RedirectStandardOutput = true;
